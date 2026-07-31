@@ -1,0 +1,251 @@
+{
+  "title": "vuln-agent",
+  "uid": "vuln-agent-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Scans (last 6h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(vuln_agent_scans_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Scan Duration (p50 / p95)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vuln_agent_scan_duration_seconds_bucket[15m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vuln_agent_scan_duration_seconds_bucket[15m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Findings Total",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "vuln_agent_code_findings_total",
+          "legendFormat": "code"
+        },
+        {
+          "expr": "vuln_agent_dep_findings_total",
+          "legendFormat": "dependency"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Fixes: Confirmed vs Withheld",
+      "type": "piechart",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (vuln_agent_fixes_total)",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Report Emails",
+      "type": "piechart",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (vuln_agent_report_emails_total)",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Scan Error Rate (5m)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "100 * sum(increase(vuln_agent_scans_total{status=\"error\"}[1h])) / clamp_min(sum(increase(vuln_agent_scans_total[1h])), 1)",
+          "legendFormat": "% error (1h)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Avg Critic Score (trend)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(vuln_agent_critic_score_sum[30m]) / clamp_min(rate(vuln_agent_critic_score_count[30m]), 0.0001)",
+          "legendFormat": "avg critic score"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Avg Retries per File (trend)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 1,
+          "max": 3
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(vuln_agent_fix_attempts_per_file_sum[30m]) / clamp_min(rate(vuln_agent_fix_attempts_per_file_count[30m]), 0.0001)",
+          "legendFormat": "avg attempts/file"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Fix Success Rate (%)",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "100 * sum(vuln_agent_fix_final_outcome_total{verdict=\"pass\"}) / clamp_min(sum(vuln_agent_fix_final_outcome_total), 1)",
+          "legendFormat": "% files confirmed pass"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Scans All-Time (by status)",
+      "type": "barchart",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (vuln_agent_scans_total_db_total)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Findings & Fixes All-Time",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "targets": [
+        {
+          "expr": "vuln_agent_code_findings_total_db_total",
+          "legendFormat": "code findings"
+        },
+        {
+          "expr": "vuln_agent_dep_findings_total_db_total",
+          "legendFormat": "dependency findings"
+        },
+        {
+          "expr": "vuln_agent_fixes_total_db_total{outcome=\"confirmed\"}",
+          "legendFormat": "fixes confirmed"
+        },
+        {
+          "expr": "vuln_agent_fixes_total_db_total{outcome=\"withheld\"}",
+          "legendFormat": "fixes withheld"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Scans Currently In Progress",
+      "type": "gauge",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10
+        }
+      },
+      "targets": [
+        {
+          "expr": "vuln_agent_scans_in_progress_db",
+          "legendFormat": "in progress"
+        }
+      ]
+    }
+  ]
+}

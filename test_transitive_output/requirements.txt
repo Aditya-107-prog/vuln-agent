@@ -1,0 +1,5 @@
+requests==2.25.0
+flask==2.0.3
+
+# Transitive dependency pins added by Vulnerability Finder Agent
+urllib3==1.26.5  # transitive dependency pin (fixes GHSA-fake-transitive-0002)

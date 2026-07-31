@@ -1,0 +1,12 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # "prometheus" here is the docker-compose service name below --
+    # containers on the same compose network resolve each other by
+    # service name, no host.docker.internal needed for this one hop.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

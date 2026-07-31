@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 1m
+
+scrape_configs:
+  - job_name: "vuln-agent"
+    static_configs:
+      # host.docker.internal resolves to the Windows host machine from
+      # inside the container -- works out of the box on Docker Desktop
+      # for Windows/Mac. On native Linux Docker, this alias needs the
+      # extra_hosts entry already added for the prometheus service in
+      # docker-compose.yml below (harmless no-op on Windows/Mac).
+      - targets: ["host.docker.internal:5000"]

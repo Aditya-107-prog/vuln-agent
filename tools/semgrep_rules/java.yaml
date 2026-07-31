@@ -1,0 +1,162 @@
+rules:
+  - id: java-sql-injection-string-concat
+    languages: [java]
+    severity: ERROR
+    message: >-
+      SQL query built via string concatenation. Use PreparedStatement
+      with parameter binding instead. Taint-mode rule -- follows the
+      tainted string through variable assignment, not just inline
+      concatenation directly inside the call.
+    metadata:
+      rule_id: JAVA-SQLI-001
+      cwe: "CWE-89"
+    mode: taint
+    pattern-sources:
+      - pattern: "\"...\" + $VAR"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $STMT.executeQuery($QUERY)
+          - pattern: $STMT.execute($QUERY)
+          - pattern: $STMT.executeUpdate($QUERY)
+
+  - id: java-weak-hash-md5
+    languages: [java]
+    severity: WARNING
+    message: "MD5 is a weak/broken hash algorithm for security purposes."
+    metadata:
+      rule_id: JAVA-WEAKHASH-001
+      cwe: "CWE-327"
+    patterns:
+      - pattern: MessageDigest.getInstance("MD5")
+
+  - id: java-weak-hash-sha1
+    languages: [java]
+    severity: WARNING
+    message: "SHA-1 is a weak hash algorithm for security purposes."
+    metadata:
+      rule_id: JAVA-WEAKHASH-002
+      cwe: "CWE-327"
+    patterns:
+      - pattern: MessageDigest.getInstance("SHA-1")
+
+  - id: java-hardcoded-credentials
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Hardcoded credential/secret literal (variable name suggests a
+      password, API key, token, or secret). Load from environment
+      variables or a secrets manager instead.
+    metadata:
+      rule_id: JAVA-HARDCODED-CRED-001
+      cwe: "CWE-798"
+    patterns:
+      - pattern-either:
+          - pattern: String $VAR = "...";
+          - pattern: final String $VAR = "...";
+          - pattern: static final String $VAR = "...";
+          - pattern: private static final String $VAR = "...";
+          - pattern: public static final String $VAR = "...";
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(password|passwd|pwd|secret|apikey|api_key|token|accesskey|access_key|privatekey|private_key).*
+
+  - id: java-hardcoded-db-connection-password
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Hardcoded password literal passed directly to a database
+      connection call.
+    metadata:
+      rule_id: JAVA-HARDCODED-CRED-002
+      cwe: "CWE-798"
+    patterns:
+      - pattern: DriverManager.getConnection($URL, $USER, "...")
+
+  - id: java-weak-cipher-des
+    languages: [java]
+    severity: ERROR
+    message: "DES is a broken/obsolete encryption cipher -- use AES instead."
+    metadata:
+      rule_id: JAVA-WEAKCIPHER-001
+      cwe: "CWE-327"
+    patterns:
+      - pattern-either:
+          - pattern: Cipher.getInstance("DES")
+          - pattern: Cipher.getInstance("DES/...")
+
+  - id: java-weak-cipher-rc4
+    languages: [java]
+    severity: ERROR
+    message: "RC4 (ARCFOUR) is a broken/obsolete stream cipher -- use AES-GCM instead."
+    metadata:
+      rule_id: JAVA-WEAKCIPHER-002
+      cwe: "CWE-327"
+    patterns:
+      - pattern-either:
+          - pattern: Cipher.getInstance("RC4")
+          - pattern: Cipher.getInstance("ARCFOUR")
+
+  - id: java-weak-random
+    languages: [java]
+    severity: WARNING
+    message: >-
+      java.util.Random is NOT cryptographically secure -- if this value
+      is used for anything security-sensitive (tokens, session IDs,
+      passwords, nonces), use java.security.SecureRandom instead. If
+      this is genuinely non-security use, this is a false positive.
+    metadata:
+      rule_id: JAVA-WEAKRANDOM-001
+      cwe: "CWE-338"
+    patterns:
+      - pattern: new Random(...)
+
+  - id: java-insecure-deserialization
+    languages: [java]
+    severity: ERROR
+    message: >-
+      ObjectInputStream.readObject() on data from an untrusted source
+      can lead to arbitrary code execution via a deserialization gadget
+      chain. Avoid deserializing untrusted data, or validate/allowlist
+      the expected classes first.
+    metadata:
+      rule_id: JAVA-DESERIALIZATION-001
+      cwe: "CWE-502"
+    patterns:
+      - pattern: $OIS.readObject()
+      - pattern-inside: |
+          $TYPE $OIS = new ObjectInputStream(...);
+          ...
+
+  - id: java-ssrf-unvalidated-url
+    languages: [java]
+    severity: ERROR
+    message: >-
+      URL constructed from a method parameter (likely user input) is
+      opened with no allowlist/host validation -- Server-Side Request
+      Forgery risk. Validate the host against an allowlist before
+      connecting. Taint-mode rule -- follows the URL object through
+      variable assignment, not just a single chained call, since real
+      code usually constructs the URL and opens it in separate
+      statements.
+    metadata:
+      rule_id: JAVA-SSRF-001
+      cwe: "CWE-918"
+    mode: taint
+    pattern-sources:
+      - pattern: new URL($PARAM)
+    pattern-sinks:
+      - pattern: $URLVAR.openConnection()
+
+  - id: java-command-injection
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Runtime.exec / ProcessBuilder invoked with a concatenated string
+      containing a variable -- potential command injection.
+    metadata:
+      rule_id: JAVA-CMDI-001
+      cwe: "CWE-78"
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec("..." + $VAR)
+          - pattern: Runtime.getRuntime().exec("..." + $VAR + "...")

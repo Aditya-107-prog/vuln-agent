@@ -1,0 +1,152 @@
+rules:
+  - id: go-sql-injection-string-concat
+    languages: [go]
+    severity: ERROR
+    message: >-
+      SQL query built via string concatenation with a variable. Use
+      parameterized queries (db.Query with ? placeholders) instead.
+      This is a taint-mode rule -- it follows the tainted string
+      through variable assignment, not just inline concatenation
+      directly inside the call, since real-world code almost always
+      builds the query string first and passes a variable.
+    metadata:
+      rule_id: GO-SQLI-001
+      cwe: "CWE-89"
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: "\"...\" + $VAR"
+          - pattern: fmt.Sprintf("...%s...", $VAR)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $DB.Query($QUERY, ...)
+          - pattern: $DB.Exec($QUERY, ...)
+          - pattern: $DB.QueryRow($QUERY, ...)
+
+  - id: go-shell-command-injection
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Shell command constructed with string concatenation from a variable,
+      passed to sh -c. Vulnerable to shell injection.
+    metadata:
+      rule_id: GO-SHELLI-001
+      cwe: "CWE-78"
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command("sh", "-c", "..." + $VAR)
+          - pattern: exec.Command("bash", "-c", "..." + $VAR)
+
+  - id: go-weak-hash-md5
+    languages: [go]
+    severity: WARNING
+    message: "MD5 is a weak/broken hash for security purposes."
+    metadata:
+      rule_id: GO-WEAKHASH-001
+      cwe: "CWE-327"
+    patterns:
+      - pattern: md5.New(...)
+
+  - id: go-weak-hash-sha1
+    languages: [go]
+    severity: WARNING
+    message: "SHA1 is a weak hash for security purposes."
+    metadata:
+      rule_id: GO-WEAKHASH-002
+      cwe: "CWE-327"
+    patterns:
+      - pattern: sha1.New(...)
+
+  - id: go-hardcoded-credentials
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Hardcoded credential/secret literal (variable name suggests a
+      password, API key, token, or secret). Load from environment
+      variables or a secrets manager instead.
+    metadata:
+      rule_id: GO-HARDCODED-CRED-001
+      cwe: "CWE-798"
+    patterns:
+      - pattern-either:
+          - pattern: $VAR := "..."
+          - pattern: const $VAR = "..."
+          - pattern: var $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(password|passwd|pwd|secret|apikey|api_key|token|accesskey|access_key|privatekey|private_key).*
+
+  - id: go-weak-tls-insecure-skip-verify
+    languages: [go]
+    severity: ERROR
+    message: >-
+      tls.Config with InsecureSkipVerify: true disables TLS certificate
+      verification entirely, making the connection vulnerable to
+      man-in-the-middle attacks.
+    metadata:
+      rule_id: GO-WEAKTLS-001
+      cwe: "CWE-295"
+    patterns:
+      - pattern: "tls.Config{..., InsecureSkipVerify: true, ...}"
+
+  - id: go-weak-cipher-des
+    languages: [go]
+    severity: ERROR
+    message: "DES is a broken/obsolete encryption cipher -- use AES instead."
+    metadata:
+      rule_id: GO-WEAKCIPHER-001
+      cwe: "CWE-327"
+    patterns:
+      - pattern-either:
+          - pattern: des.NewCipher(...)
+          - pattern: des.NewTripleDESCipher(...)
+
+  - id: go-weak-cipher-rc4
+    languages: [go]
+    severity: ERROR
+    message: "RC4 is a broken/obsolete stream cipher -- use AES-GCM or ChaCha20-Poly1305 instead."
+    metadata:
+      rule_id: GO-WEAKCIPHER-002
+      cwe: "CWE-327"
+    patterns:
+      - pattern: rc4.NewCipher(...)
+
+  - id: go-weak-random-math-rand
+    languages: [go]
+    severity: WARNING
+    message: >-
+      math/rand is NOT cryptographically secure -- if this value is used
+      for anything security-sensitive (tokens, session IDs, keys, nonces),
+      use crypto/rand instead. If this is genuinely non-security use
+      (e.g. jitter, sampling), this is a false positive.
+    metadata:
+      rule_id: GO-WEAKRANDOM-001
+      cwe: "CWE-338"
+    patterns:
+      - pattern-either:
+          - pattern: rand.Intn(...)
+          - pattern: rand.Int63(...)
+          - pattern: rand.Int31(...)
+
+  - id: go-ssrf-unvalidated-request-url
+    languages: [go]
+    severity: ERROR
+    message: >-
+      URL taken from an incoming request (query param / form value) is
+      passed directly to an outbound HTTP call with no allowlist/host
+      validation -- Server-Side Request Forgery risk. Validate the host
+      against an allowlist before making the request.
+    metadata:
+      rule_id: GO-SSRF-001
+      cwe: "CWE-918"
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $R.URL.Query().Get(...)
+          - pattern: $R.FormValue(...)
+          - pattern: $R.PostFormValue(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: http.Get($URL)
+          - pattern: http.Post($URL, ...)
+          - pattern: http.Head($URL)

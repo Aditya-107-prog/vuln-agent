@@ -1,0 +1,123 @@
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# ==========================
+# Virtual Environments
+# ==========================
+venv/
+.venv/
+env/
+ENV/
+
+# ==========================
+# Environment Variables
+# ==========================
+.env
+.env.*
+!.env.example
+
+# ==========================
+# Databases
+# ==========================
+*.db
+*.sqlite
+*.sqlite3
+
+# ==========================
+# Logs
+# ==========================
+logs/
+*.log
+
+# ==========================
+# Test / Coverage
+# ==========================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ==========================
+# Type Checkers / Linters
+# ==========================
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# ==========================
+# Jupyter
+# ==========================
+.ipynb_checkpoints/
+
+# ==========================
+# Build / Packaging
+# ==========================
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ==========================
+# IDEs
+# ==========================
+.vscode/
+.idea/
+*.iml
+
+# ==========================
+# OS Files
+# ==========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================
+# Secrets / Keys
+# ==========================
+*.pem
+*.key
+*.crt
+*.p12
+
+# ==========================
+# Scanner Binaries
+# (Download during setup)
+# ==========================
+osv-scanner
+osv-scanner.exe
+
+# ==========================
+# Temporary Files
+# ==========================
+tmp/
+temp/
+*.tmp
+
+# ==========================
+# Generated Reports
+# Keep only sample reports in examples/
+# ==========================
+reports/
+output/
+results/
+scan_results/
+
+# ==========================
+# Node (if frontend exists)
+# ==========================
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pr_workdir/
+test_transitive_output/
+test_transitive_workspace/
+proposed_fixes/

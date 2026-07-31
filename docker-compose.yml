@@ -1,0 +1,54 @@
+# docker-compose.yml -- observability stack only (Prometheus + Grafana).
+#
+# vuln-agent itself (web_app.py) still runs directly on your machine as
+# before -- it is NOT containerized here. These two services just scrape
+# and visualize the /metrics endpoint it already exposes. Run with:
+#
+#   docker compose up -d
+#
+# Then:
+#   Prometheus UI: http://localhost:9090
+#   Grafana:       http://localhost:3000  (login: admin / admin on first run)
+#   The "vuln-agent" dashboard is pre-provisioned -- no manual setup needed.
+#
+# Requires web_app.py to already be running on port 5000 on your host
+# machine before Prometheus can scrape it successfully.
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: vuln-agent-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # No-op on Docker Desktop (Windows/Mac), where host.docker.internal
+      # already resolves automatically -- included so this same compose
+      # file also works unmodified on native Linux Docker.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: vuln-agent-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Forces a password change prompt is disabled for simplicity in
+      # local/student use -- change GF_SECURITY_ADMIN_PASSWORD (and
+      # remove this line) before any real deployment.
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  grafana_data:

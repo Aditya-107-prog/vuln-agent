@@ -1,0 +1,17 @@
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-groq>=0.2.0
+groq>=0.11.0
+bandit>=1.7.0
+pip-audit>=2.7.0
+requests>=2.32.0
+markdown>=3.7
+python-dotenv>=1.0.0
+langfuse>=4.0.0
+PyGithub>=2.3.0
+boto3>=1.34.0 
+Flask-Login
+Flask-SQLAlchemy
+pytest>=7.0
+pytest-mock>=3.10
+pytest-flask>=1.3
