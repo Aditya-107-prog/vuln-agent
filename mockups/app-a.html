@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Dashboard A</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  .sidebar {
+    border-right: 1px solid var(--hairline);
+    padding: var(--lg) 0;
+    display: flex; flex-direction: column;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .sidebar .brand { padding: var(--md) var(--lg) var(--xl); }
+  .side-nav { display: flex; flex-direction: column; }
+  .side-nav a {
+    padding: 14px var(--lg);
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted); text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  .side-nav a.active { color: var(--on-dark); border-left-color: var(--on-dark); }
+  .side-nav a:hover { color: var(--on-dark); }
+  .side-foot { margin-top: auto; padding: var(--lg); border-top: 1px solid var(--hairline); }
+
+  .main { padding: var(--xl); }
+  .page-head { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: var(--xl); }
+  .stat-grid { display:grid; grid-template-columns: repeat(4,1fr); border:1px solid var(--hairline); margin-bottom: var(--xxl); }
+  .stat { padding: var(--lg); border-right:1px solid var(--hairline); }
+  .stat:last-child { border-right:none; }
+  .stat .display-md { margin: var(--xs) 0; }
+  .stat .warn { color: var(--warning); }
+  .stat .ok { color: var(--success); }
+
+  .list-head, .repo-row {
+    display:grid; grid-template-columns: 2fr 1fr 1fr 120px; gap: var(--lg);
+    align-items:center; padding: var(--lg) 0;
+    border-bottom:1px solid var(--hairline);
+  }
+  .list-head { border-bottom-color: var(--hairline-strong); }
+  .list-head span { font-family: var(--font-mono); font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--muted-soft); }
+  .repo-row .name { font-family: var(--font-display); font-size:18px; letter-spacing:1px; text-transform:uppercase; }
+  .repo-row .sub { font-family: var(--font-mono); font-size:11px; letter-spacing:1px; color:var(--muted); }
+  .sev { font-family: var(--font-mono); font-size:11px; letter-spacing:1px; text-transform:uppercase; }
+  .sev.high { color: var(--warning); }
+  .sev.clear { color: var(--success); }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { position: static; height:auto; flex-direction: row; flex-wrap:wrap; align-items:center; }
+    .side-foot { display:none; }
+    .stat-grid { grid-template-columns: 1fr 1fr; }
+    .list-head { display:none; }
+    .repo-row { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="wordmark brand" href="landing-a.html">Sentinel</a>
+    <nav class="side-nav">
+      <a href="#" class="active">Overview</a>
+      <a href="app-b.html">Repositories</a>
+      <a href="app-b.html">Findings</a>
+      <a href="app-c.html">History</a>
+      <a href="#">Integrations</a>
+      <a href="#">Account</a>
+    </nav>
+    <div class="side-foot">
+      <p class="caption">Signed in as</p>
+      <p class="body-sm" style="color:var(--on-dark);">ettore@bugatti.dev</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <p class="caption">Workspace</p>
+        <h1 class="display-lg">Overview</h1>
+      </div>
+      <a class="btn" href="#">New scan</a>
+    </div>
+
+    <section class="stat-grid">
+      <div class="stat"><p class="caption">Repositories</p><div class="display-md">24</div></div>
+      <div class="stat"><p class="caption">Open findings</p><div class="display-md warn">7</div></div>
+      <div class="stat"><p class="caption">Fixes merged</p><div class="display-md ok">312</div></div>
+      <div class="stat"><p class="caption">Last scan</p><div class="display-md">11s</div></div>
+    </section>
+
+    <div class="list-head">
+      <span>Repository</span><span>Last scan</span><span>Severity</span><span></span>
+    </div>
+
+    <div class="repo-row">
+      <div><div class="name">payments-api</div><div class="sub">main · python · 1,204 deps</div></div>
+      <div class="sub">2m ago</div>
+      <div class="sev high">3 High</div>
+      <a class="mono-link" href="app-b.html">Review →</a>
+    </div>
+    <div class="repo-row">
+      <div><div class="name">web-frontend</div><div class="sub">main · node · 2,880 deps</div></div>
+      <div class="sub">18m ago</div>
+      <div class="sev high">4 Medium</div>
+      <a class="mono-link" href="app-b.html">Review →</a>
+    </div>
+    <div class="repo-row">
+      <div><div class="name">auth-service</div><div class="sub">main · go · 340 deps</div></div>
+      <div class="sub">1h ago</div>
+      <div class="sev clear">Clear</div>
+      <a class="mono-link" href="app-b.html">Review →</a>
+    </div>
+    <div class="repo-row">
+      <div><div class="name">infra-terraform</div><div class="sub">main · hcl · 62 modules</div></div>
+      <div class="sub">3h ago</div>
+      <div class="sev clear">Clear</div>
+      <a class="mono-link" href="app-b.html">Review →</a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

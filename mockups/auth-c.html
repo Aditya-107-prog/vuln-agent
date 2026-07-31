@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Access C</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .auth-wrap {
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: var(--xl);
+    background: radial-gradient(120% 90% at 50% 0%, #141414 0%, #000 55%);
+  }
+  .auth-card { width: 100%; max-width: 420px; }
+  .toggle {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-pill);
+    overflow: hidden; margin-bottom: var(--xxl);
+  }
+  .toggle button {
+    background: transparent; border: none; cursor: pointer;
+    padding: 12px 0;
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .toggle button.active { background: var(--on-dark); color: var(--on-primary); }
+  .auth-card h1 { text-align:center; margin-bottom: var(--xl); }
+  #signup-fields { display: none; }
+  body.mode-signup #signup-fields { display: flex; }
+  body.mode-signup #cta { }
+</style>
+</head>
+<body class="mode-signin">
+
+<nav class="top-nav">
+  <a class="wordmark center" href="landing-c.html">Sentinel</a>
+</nav>
+
+<main class="auth-wrap">
+  <div class="auth-card">
+    <div class="toggle">
+      <button id="t-signin" class="active" onclick="setMode('signin')">Sign in</button>
+      <button id="t-signup" onclick="setMode('signup')">Sign up</button>
+    </div>
+
+    <form class="stack-lg">
+      <div class="field" id="signup-fields" style="flex-direction:column; gap:var(--xs);">
+        <label>Full name</label>
+        <input class="input" type="text" placeholder="Ettore Bugatti">
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input class="input" type="email" placeholder="you@company.com">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input class="input" type="password" placeholder="••••••••">
+      </div>
+
+      <a class="btn btn-full" id="cta" href="app-c.html">Continue</a>
+      <p class="caption center-text">Protected by hardware-key MFA</p>
+    </form>
+  </div>
+</main>
+
+<script>
+  function setMode(m){
+    document.body.className = 'mode-' + m;
+    document.getElementById('t-signin').classList.toggle('active', m==='signin');
+    document.getElementById('t-signup').classList.toggle('active', m==='signup');
+    document.getElementById('cta').textContent = m==='signup' ? 'Create account' : 'Continue';
+  }
+</script>
+
+</body>
+</html>

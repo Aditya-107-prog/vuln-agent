@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Landing C</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .hero-band {
+    position: relative; min-height: 78vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+    background:
+      radial-gradient(140% 100% at 50% 0%, #1c1c1c 0%, #000 55%);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .hero-band h1 { max-width: 1000px; margin: var(--md) 0 var(--lg); }
+  .grid-3 {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--xl);
+    padding: var(--section) var(--xl);
+  }
+  .model-card .thumb {
+    aspect-ratio: 16/9; margin-bottom: var(--md);
+    background: linear-gradient(135deg, #161616, #000);
+    border: 1px solid var(--hairline);
+  }
+  .model-card .display-sm { margin-bottom: var(--xs); }
+  .cta-band {
+    position: relative; padding: var(--section) var(--xl);
+    text-align: center;
+    background: radial-gradient(100% 120% at 50% 100%, #1a1a1a, #000 60%);
+    border-top: 1px solid var(--hairline);
+  }
+  .cta-band h2 { margin-bottom: var(--xl); }
+  @media (max-width: 768px) {
+    .display-xl { font-size: 34px; }
+    .grid-3 { grid-template-columns: 1fr; gap: var(--xl); padding: var(--xxl) var(--xl); }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <div class="nav-group"><a class="nav-link" href="#">Menu</a></div>
+  <a class="wordmark center" href="#">Sentinel</a>
+  <div class="nav-group"><a class="nav-link" href="auth-c.html">Sign in</a></div>
+</nav>
+
+<header class="hero-band">
+  <p class="caption">Continuous · Autonomous · Silent</p>
+  <h1 class="display-xl">The perimeter,<br>rewritten</h1>
+  <p class="body-md" style="max-width:480px;">A security agent that reads your code the way an attacker would — then closes the door first.</p>
+  <div style="margin-top:var(--xl);"><a class="btn" href="auth-c.html">Enter</a></div>
+</header>
+
+<section class="grid-3">
+  <article class="model-card">
+    <div class="thumb"></div>
+    <p class="caption">Code · SAST</p>
+    <h3 class="display-sm">Source analysis</h3>
+    <p class="body-sm">Taint tracking across your own code, tuned for the languages you actually ship.</p>
+    <p style="margin-top:var(--md);"><a class="mono-link" href="#">Discover →</a></p>
+  </article>
+  <article class="model-card">
+    <div class="thumb"></div>
+    <p class="caption">Dependencies · SCA</p>
+    <h3 class="display-sm">Supply chain</h3>
+    <p class="body-sm">Full transitive graphs, enriched with live CVE and exploit-maturity signals.</p>
+    <p style="margin-top:var(--md);"><a class="mono-link" href="#">Discover →</a></p>
+  </article>
+  <article class="model-card">
+    <div class="thumb"></div>
+    <p class="caption">Remediation · PR</p>
+    <h3 class="display-sm">Autonomous fixes</h3>
+    <p class="body-sm">The patch, the test, the pull request — generated, reviewed, and ready to merge.</p>
+    <p style="margin-top:var(--md);"><a class="mono-link" href="#">Discover →</a></p>
+  </article>
+</section>
+
+<section class="cta-band">
+  <p class="caption">Ready when you are</p>
+  <h2 class="display-lg">Discover Sentinel</h2>
+  <a class="btn" href="auth-c.html">Request access</a>
+</section>
+
+<footer class="footer">
+  <div class="container center-text">
+    <span class="wordmark">Sentinel</span>
+    <p class="body-sm muted" style="margin-top:var(--md);">© 2026 Sentinel Security. All rights reserved.</p>
+  </div>
+</footer>
+
+</body>
+</html>

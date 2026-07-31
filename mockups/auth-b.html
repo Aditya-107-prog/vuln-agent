@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Sign up B</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .auth-split { display: grid; grid-template-columns: 1fr 1fr; min-height: 100vh; }
+  .auth-panel {
+    position: relative;
+    background: radial-gradient(90% 80% at 30% 30%, #1e1e1e 0%, #000 60%);
+    border-right: 1px solid var(--hairline);
+    padding: var(--xxl) var(--xl);
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .auth-panel .lead { max-width: 360px; }
+  .auth-panel h2 { margin: var(--md) 0; }
+  .auth-side {
+    display: flex; align-items: center; justify-content: center; padding: var(--xxl) var(--xl);
+  }
+  .auth-form { width: 100%; max-width: 400px; }
+  .auth-form h1 { margin-bottom: var(--xs); }
+  .auth-form > .caption { display:block; margin-bottom: var(--xl); }
+  .oauth-row { display:flex; gap: var(--sm); }
+  .oauth-row .btn { flex: 1; padding: 14px 0; border-color: var(--hairline-strong); color: var(--body); font-size: 12px; letter-spacing: 2px; }
+  .divider { display:flex; align-items:center; gap:var(--md); }
+  .divider .line { flex:1; border-top:1px solid var(--hairline); }
+  @media (max-width: 768px) {
+    .auth-split { grid-template-columns: 1fr; }
+    .auth-panel { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<section class="auth-split">
+  <aside class="auth-panel">
+    <a class="wordmark" href="landing-b.html">Sentinel</a>
+    <div class="lead">
+      <p class="caption">Trusted by engineering teams</p>
+      <h2 class="display-md">Security that writes<br>its own fixes</h2>
+      <p class="body-md">Connect a repo, and the first pull request lands within the hour.</p>
+    </div>
+    <p class="caption">Engineered precision · Zero configuration</p>
+  </aside>
+
+  <div class="auth-side">
+    <form class="auth-form stack-lg">
+      <div>
+        <h1 class="display-md">Create account</h1>
+        <span class="caption">Fourteen days. No card.</span>
+      </div>
+
+      <div class="oauth-row">
+        <a class="btn" href="app-b.html">GitHub</a>
+        <a class="btn" href="app-b.html">GitLab</a>
+      </div>
+
+      <div class="divider"><span class="line"></span><span class="caption">Or</span><span class="line"></span></div>
+
+      <div class="field">
+        <label>Full name</label>
+        <input class="input" type="text" placeholder="Jean Bugatti">
+      </div>
+      <div class="field">
+        <label>Work email</label>
+        <input class="input" type="email" placeholder="you@company.com">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input class="input" type="password" placeholder="At least 12 characters">
+      </div>
+
+      <a class="btn btn-full" href="app-b.html">Create account</a>
+      <p class="body-sm center-text muted">Already registered? <a class="text-link" href="auth-a.html">Sign in</a></p>
+    </form>
+  </div>
+</section>
+
+</body>
+</html>

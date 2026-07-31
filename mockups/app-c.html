@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — History C</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  .sidebar { border-right:1px solid var(--hairline); padding: var(--lg) 0; display:flex; flex-direction:column; position:sticky; top:0; height:100vh; }
+  .sidebar .brand { padding: var(--md) var(--lg) var(--xl); }
+  .side-nav { display:flex; flex-direction:column; }
+  .side-nav a { padding:14px var(--lg); font-family:var(--font-mono); font-size:12px; letter-spacing:2px; text-transform:uppercase; color:var(--muted); text-decoration:none; border-left:2px solid transparent; }
+  .side-nav a.active { color:var(--on-dark); border-left-color:var(--on-dark); }
+  .side-foot { margin-top:auto; padding:var(--lg); border-top:1px solid var(--hairline); }
+
+  .main { padding: var(--xl); }
+  .page-head { margin-bottom: var(--xl); }
+  .filter-row { display:flex; gap: var(--sm); margin-bottom: var(--xl); }
+  .chip {
+    font-family:var(--font-mono); font-size:11px; letter-spacing:2px; text-transform:uppercase;
+    color:var(--muted); padding:8px 16px; border:1px solid var(--hairline-strong); border-radius:var(--r-pill);
+    text-decoration:none;
+  }
+  .chip.active { color:var(--on-primary); background:var(--on-dark); border-color:var(--on-dark); }
+
+  .cards { display:grid; grid-template-columns: 1fr 1fr; gap: var(--xl); }
+  .article-card { border:1px solid var(--hairline); border-radius:var(--r-none); }
+  .article-card .thumb { aspect-ratio:16/9; background:linear-gradient(135deg,#161616,#000); border-bottom:1px solid var(--hairline); position:relative; }
+  .article-card .thumb .status { position:absolute; left:var(--md); bottom:var(--md); }
+  .article-card .content { padding: var(--lg); }
+  .article-card .date { display:block; margin-bottom: var(--sm); }
+  .article-card h3 { margin-bottom: var(--sm); }
+  .ok { color: var(--success); } .warn { color: var(--warning); }
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { position:static; height:auto; flex-direction:row; flex-wrap:wrap; }
+    .side-foot{ display:none; }
+    .cards { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="wordmark brand" href="landing-c.html">Sentinel</a>
+    <nav class="side-nav">
+      <a href="app-a.html">Overview</a>
+      <a href="app-a.html">Repositories</a>
+      <a href="app-b.html">Findings</a>
+      <a href="#" class="active">History</a>
+      <a href="#">Integrations</a>
+      <a href="#">Account</a>
+    </nav>
+    <div class="side-foot">
+      <p class="caption">Signed in as</p>
+      <p class="body-sm" style="color:var(--on-dark);">ettore@bugatti.dev</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-head">
+      <p class="caption">Audit trail</p>
+      <h1 class="display-lg">Scan history</h1>
+    </div>
+
+    <div class="filter-row">
+      <a class="chip active" href="#">All</a>
+      <a class="chip" href="#">Resolved</a>
+      <a class="chip" href="#">Findings</a>
+      <a class="chip" href="#">Failed</a>
+    </div>
+
+    <section class="cards">
+      <article class="article-card">
+        <div class="thumb"><span class="status caption warn">2 High resolved</span></div>
+        <div class="content">
+          <span class="caption date">31 July 2026 · 14:02</span>
+          <h3 class="title-md">payments-api · Scan #4021</h3>
+          <p class="body-sm">Prototype pollution and a SQL injection closed; two pull requests merged to main.</p>
+          <p style="margin-top:var(--md);"><a class="mono-link" href="app-b.html">View report →</a></p>
+        </div>
+      </article>
+
+      <article class="article-card">
+        <div class="thumb"><span class="status caption ok">Clear</span></div>
+        <div class="content">
+          <span class="caption date">31 July 2026 · 13:44</span>
+          <h3 class="title-md">auth-service · Scan #4020</h3>
+          <p class="body-sm">Full transitive graph walked. No reachable vulnerabilities detected across 340 dependencies.</p>
+          <p style="margin-top:var(--md);"><a class="mono-link" href="app-b.html">View report →</a></p>
+        </div>
+      </article>
+
+      <article class="article-card">
+        <div class="thumb"><span class="status caption warn">4 Medium</span></div>
+        <div class="content">
+          <span class="caption date">31 July 2026 · 11:20</span>
+          <h3 class="title-md">web-frontend · Scan #4019</h3>
+          <p class="body-sm">Outdated transitive packages flagged; fixes awaiting maintainer approval.</p>
+          <p style="margin-top:var(--md);"><a class="mono-link" href="app-b.html">View report →</a></p>
+        </div>
+      </article>
+
+      <article class="article-card">
+        <div class="thumb"><span class="status caption ok">Clear</span></div>
+        <div class="content">
+          <span class="caption date">30 July 2026 · 22:05</span>
+          <h3 class="title-md">infra-terraform · Scan #4018</h3>
+          <p class="body-sm">Module registry and provider pins verified against known advisories. Nothing to report.</p>
+          <p style="margin-top:var(--md);"><a class="mono-link" href="app-b.html">View report →</a></p>
+        </div>
+      </article>
+    </section>
+  </main>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Bugatti mockups</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .wrap { max-width: 1100px; margin: 0 auto; padding: var(--xxl) var(--xl) var(--section); }
+  .head { text-align:center; margin-bottom: var(--section); }
+  .head h1 { margin: var(--md) 0; }
+  .group { margin-bottom: var(--xxl); }
+  .group > .caption { display:block; border-top:1px solid var(--hairline-strong); padding-top:var(--md); margin-bottom:var(--lg); }
+  .row { display:grid; grid-template-columns: repeat(3,1fr); gap: var(--xl); }
+  .tile { border:1px solid var(--hairline); text-decoration:none; color:var(--on-dark); display:block; }
+  .tile .prev { aspect-ratio:16/10; background:linear-gradient(135deg,#151515,#000); border-bottom:1px solid var(--hairline); display:flex; align-items:center; justify-content:center; }
+  .tile .prev span { font-family:var(--font-display); font-size:40px; letter-spacing:4px; color:var(--hairline-strong); }
+  .tile .label { padding: var(--md) var(--lg); display:flex; justify-content:space-between; align-items:center; }
+  .tile:hover { border-color: var(--hairline-strong); }
+  .tile:hover .prev span { color: var(--muted-soft); }
+  @media (max-width:768px){ .row{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+
+<nav class="top-nav"><a class="wordmark center" href="#">Sentinel</a></nav>
+
+<div class="wrap">
+  <header class="head">
+    <p class="caption">Design system · Bugatti pattern</p>
+    <h1 class="display-xl">Mockups</h1>
+    <p class="body-md muted" style="max-width:520px;margin:0 auto;">Nine screens across three surfaces, built on the austere Bugatti design language — black canvas, letterspaced display, serif body, transparent-pill buttons.</p>
+  </header>
+
+  <section class="group">
+    <span class="caption">Landing · 3 variants</span>
+    <div class="row">
+      <a class="tile" href="landing-a.html"><div class="prev"><span>A</span></div><div class="label"><span class="title-sm">Centered hero</span><span class="mono-link">Open →</span></div></a>
+      <a class="tile" href="landing-b.html"><div class="prev"><span>B</span></div><div class="label"><span class="title-sm">Split panel</span><span class="mono-link">Open →</span></div></a>
+      <a class="tile" href="landing-c.html"><div class="prev"><span>C</span></div><div class="label"><span class="title-sm">Editorial grid</span><span class="mono-link">Open →</span></div></a>
+    </div>
+  </section>
+
+  <section class="group">
+    <span class="caption">Login / Signup · 3 variants</span>
+    <div class="row">
+      <a class="tile" href="auth-a.html"><div class="prev"><span>A</span></div><div class="label"><span class="title-sm">Minimal center</span><span class="mono-link">Open →</span></div></a>
+      <a class="tile" href="auth-b.html"><div class="prev"><span>B</span></div><div class="label"><span class="title-sm">Split + OAuth</span><span class="mono-link">Open →</span></div></a>
+      <a class="tile" href="auth-c.html"><div class="prev"><span>C</span></div><div class="label"><span class="title-sm">Toggle card</span><span class="mono-link">Open →</span></div></a>
+    </div>
+  </section>
+
+  <section class="group">
+    <span class="caption">App · Sidebar · 3 variants</span>
+    <div class="row">
+      <a class="tile" href="app-a.html"><div class="prev"><span>A</span></div><div class="label"><span class="title-sm">Dashboard</span><span class="mono-link">Open →</span></div></a>
+      <a class="tile" href="app-b.html"><div class="prev"><span>B</span></div><div class="label"><span class="title-sm">Scan detail</span><span class="mono-link">Open →</span></div></a>
+      <a class="tile" href="app-c.html"><div class="prev"><span>C</span></div><div class="label"><span class="title-sm">History</span><span class="mono-link">Open →</span></div></a>
+    </div>
+  </section>
+</div>
+
+<footer class="footer center-text"><span class="wordmark">Sentinel</span></footer>
+
+</body>
+</html>

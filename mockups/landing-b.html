@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Landing B</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .split {
+    display: grid; grid-template-columns: 1fr 1fr; min-height: 90vh; align-items: center;
+  }
+  .split .left { padding: var(--xxl) var(--xl); }
+  .split h1 { margin: var(--lg) 0; }
+  .split .body-md { max-width: 440px; margin-bottom: var(--xl); }
+  .panel {
+    align-self: stretch;
+    background:
+      radial-gradient(90% 70% at 70% 40%, #202020 0%, #000 65%),
+      linear-gradient(120deg, #0a0a0a, #000);
+    border-left: 1px solid var(--hairline);
+    position: relative;
+  }
+  .panel .caption-overlay {
+    position: absolute; left: var(--xl); bottom: var(--xl); color: var(--on-dark);
+  }
+  .features {
+    border-top: 1px solid var(--hairline);
+  }
+  .feature-row {
+    display: grid; grid-template-columns: 80px 1fr 1fr;
+    gap: var(--lg); align-items: baseline;
+    padding: var(--xl);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .feature-row .idx { font-family: var(--font-mono); color: var(--muted-soft); font-size: 12px; letter-spacing: 2px; }
+  @media (max-width: 768px) {
+    .split { grid-template-columns: 1fr; }
+    .panel { min-height: 40vh; border-left: none; border-top: 1px solid var(--hairline); }
+    .display-lg { font-size: 32px; }
+    .feature-row { grid-template-columns: 1fr; gap: var(--sm); }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <div class="nav-group"><a class="nav-link" href="#">Menu</a></div>
+  <a class="wordmark center" href="#">Sentinel</a>
+  <div class="nav-group"><a class="nav-link" href="auth-b.html">Sign in</a></div>
+</nav>
+
+<section class="split">
+  <div class="left">
+    <p class="caption">The security engineer that never sleeps</p>
+    <h1 class="display-lg">Ship fast.<br>Stay clean.</h1>
+    <p class="body-md">Connect a repository and Sentinel does the rest — deep dependency graphs, CVE enrichment, and a pull request with the patch already written.</p>
+    <div style="display:flex; gap:var(--md);">
+      <a class="btn" href="auth-b.html">Start free</a>
+      <a class="btn" href="app-a.html" style="border-color:var(--hairline-strong); color:var(--muted);">View demo</a>
+    </div>
+  </div>
+  <div class="panel">
+    <p class="caption-overlay caption" style="color:var(--on-dark);">Engineered precision · Zero configuration</p>
+  </div>
+</section>
+
+<section class="features">
+  <div class="feature-row">
+    <span class="idx">01</span>
+    <h3 class="title-md">Transitive resolution</h3>
+    <p class="body-sm">We walk the full dependency tree — not just what your manifest declares — and surface the CVE hiding four levels down.</p>
+  </div>
+  <div class="feature-row">
+    <span class="idx">02</span>
+    <h3 class="title-md">Autonomous fixes</h3>
+    <p class="body-sm">Every finding arrives with a diff. Approve it, and Sentinel opens the pull request against your default branch.</p>
+  </div>
+  <div class="feature-row">
+    <span class="idx">03</span>
+    <h3 class="title-md">Signal, not noise</h3>
+    <p class="body-sm">A critic model reviews each finding before it reaches you. What you see is real, reachable, and worth your time.</p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--lg);">
+    <span class="body-sm muted">© 2026 Sentinel Security.</span>
+    <span class="wordmark">Sentinel</span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Scan detail B</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  .sidebar { border-right:1px solid var(--hairline); padding: var(--lg) 0; display:flex; flex-direction:column; position:sticky; top:0; height:100vh; }
+  .sidebar .brand { padding: var(--md) var(--lg) var(--xl); }
+  .side-nav { display:flex; flex-direction:column; }
+  .side-nav a { padding:14px var(--lg); font-family:var(--font-mono); font-size:12px; letter-spacing:2px; text-transform:uppercase; color:var(--muted); text-decoration:none; border-left:2px solid transparent; }
+  .side-nav a.active { color:var(--on-dark); border-left-color:var(--on-dark); }
+  .side-foot { margin-top:auto; padding:var(--lg); border-top:1px solid var(--hairline); }
+
+  .main { padding: var(--xl); }
+  .crumb { margin-bottom: var(--md); }
+  .crumb a { color: var(--muted); }
+  .page-head { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: var(--xl); }
+
+  .finding {
+    border:1px solid var(--hairline); border-radius: var(--r-none);
+    margin-bottom: var(--md);
+  }
+  .finding .bar { display:flex; justify-content:space-between; align-items:center; padding: var(--lg); border-bottom:1px solid var(--hairline); }
+  .finding .bar.crit { border-left: 2px solid var(--warning); }
+  .finding .cve { font-family:var(--font-mono); font-size:12px; letter-spacing:1px; color:var(--muted); }
+  .finding .body { padding: var(--lg); }
+  .finding pre {
+    background: var(--surface-soft); border:1px solid var(--hairline);
+    padding: var(--md); overflow-x:auto;
+    font-family: var(--font-mono); font-size: 12px; line-height:1.6; color: var(--body);
+    margin-top: var(--md);
+  }
+  .finding pre .add { color: var(--success); }
+  .finding pre .del { color: var(--warning); }
+  .pill-sev { font-family:var(--font-mono); font-size:11px; letter-spacing:2px; text-transform:uppercase; padding:6px 14px; border:1px solid var(--hairline-strong); border-radius:var(--r-pill); }
+  .pill-sev.high { color: var(--warning); border-color: var(--warning); }
+  .actions { display:flex; gap:var(--sm); }
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { position:static; height:auto; flex-direction:row; flex-wrap:wrap; }
+    .side-foot{ display:none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="wordmark brand" href="landing-b.html">Sentinel</a>
+    <nav class="side-nav">
+      <a href="app-a.html">Overview</a>
+      <a href="#" class="active">Findings</a>
+      <a href="app-a.html">Repositories</a>
+      <a href="app-c.html">History</a>
+      <a href="#">Integrations</a>
+      <a href="#">Account</a>
+    </nav>
+    <div class="side-foot">
+      <p class="caption">Signed in as</p>
+      <p class="body-sm" style="color:var(--on-dark);">ettore@bugatti.dev</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <p class="crumb caption"><a href="app-a.html">Repositories</a> / payments-api / Scan #4021</p>
+    <div class="page-head">
+      <div>
+        <p class="caption">3 High · 2 Medium · resolved 11s ago</p>
+        <h1 class="display-lg">payments-api</h1>
+      </div>
+      <div class="actions">
+        <a class="btn" href="#" style="border-color:var(--hairline-strong); color:var(--body);">Rescan</a>
+        <a class="btn" href="#">Approve all fixes</a>
+      </div>
+    </div>
+
+    <article class="finding">
+      <div class="bar crit">
+        <div>
+          <div class="title-sm">Prototype pollution in lodash</div>
+          <span class="cve">CVE-2021-23337 · transitive · 3 levels deep</span>
+        </div>
+        <span class="pill-sev high">High · 7.2</span>
+      </div>
+      <div class="body">
+        <p class="body-sm">Reachable from <code style="font-family:var(--font-mono);font-size:12px;">utils/merge.js</code>. Sentinel generated a version bump that preserves your lockfile resolution.</p>
+        <pre>  "lodash": {
+<span class="del">-   "version": "4.17.19"</span>
+<span class="add">+   "version": "4.17.21"</span>
+  }</pre>
+        <div class="actions" style="margin-top:var(--md);">
+          <a class="btn" href="#">Open pull request</a>
+          <a class="mono-link" href="#" style="align-self:center;">Dismiss</a>
+        </div>
+      </div>
+    </article>
+
+    <article class="finding">
+      <div class="bar crit">
+        <div>
+          <div class="title-sm">SQL injection — string-built query</div>
+          <span class="cve">SAST · handlers/report.py:88 · taint from request.args</span>
+        </div>
+        <span class="pill-sev high">High · 8.1</span>
+      </div>
+      <div class="body">
+        <p class="body-sm">User input flows into a raw cursor execute. Fix parameterizes the query.</p>
+        <pre><span class="del">- cur.execute("SELECT * FROM scans WHERE id = " + rid)</span>
+<span class="add">+ cur.execute("SELECT * FROM scans WHERE id = %s", (rid,))</span></pre>
+        <div class="actions" style="margin-top:var(--md);">
+          <a class="btn" href="#">Open pull request</a>
+          <a class="mono-link" href="#" style="align-self:center;">Dismiss</a>
+        </div>
+      </div>
+    </article>
+  </main>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Sign in A</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .auth-wrap {
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: var(--xl);
+  }
+  .auth-form { width: 100%; max-width: 380px; }
+  .auth-form h1 { text-align: center; margin-bottom: var(--xs); }
+  .auth-form .caption { text-align: center; display: block; margin-bottom: var(--xxl); }
+  .row-between { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <a class="wordmark center" href="landing-a.html">Sentinel</a>
+</nav>
+
+<main class="auth-wrap">
+  <form class="auth-form stack-lg">
+    <div>
+      <h1 class="display-md">Sign in</h1>
+      <span class="caption">Autonomous vulnerability intelligence</span>
+    </div>
+
+    <div class="field">
+      <label>Email</label>
+      <input class="input" type="email" placeholder="you@company.com">
+    </div>
+
+    <div class="field">
+      <label>Password</label>
+      <input class="input" type="password" placeholder="••••••••">
+    </div>
+
+    <div class="row-between">
+      <label class="caption" style="display:flex; gap:var(--xs); align-items:center; cursor:pointer;">
+        <input type="checkbox" style="accent-color:#fff;"> Remember
+      </label>
+      <a class="mono-link" href="#">Forgot?</a>
+    </div>
+
+    <a class="btn btn-full" href="app-a.html">Continue</a>
+
+    <p class="body-sm center-text muted">No account? <a class="text-link" href="#">Request access</a></p>
+  </form>
+</main>
+
+</body>
+</html>

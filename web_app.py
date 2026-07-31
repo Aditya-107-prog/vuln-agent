@@ -1055,13 +1055,70 @@ def health():
 
 
 @app.route("/")
-@login_required
 def index():
+    # Public editorial landing for logged-out visitors; authenticated users
+    # go straight to their overview dashboard.
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+    return render_template_string(LANDING_UI)
+
+
+@app.route("/scan-console")
+@login_required
+def scan_console():
     org_options = "".join(
         f'<option value="{m.organization_id}">{m.organization.name}</option>'
         for m in current_user.memberships
     )
     return render_template_string(HTML_UI, org_options=org_options)
+
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    repos = get_user_accessible_repos(current_user)
+
+    open_findings = 0
+    done_count = 0
+    latest_scan_dt = None
+    rows = ""
+    for r in repos:
+        last_scan = r.scans[0] if r.scans else None
+        if last_scan:
+            when = f"{last_scan.created_at:%Y-%m-%d %H:%M}"
+            if latest_scan_dt is None or last_scan.created_at > latest_scan_dt:
+                latest_scan_dt = last_scan.created_at
+            if last_scan.status == "done":
+                done_count += 1
+                findings = (last_scan.code_findings_count or 0) + (last_scan.dep_findings_count or 0)
+                open_findings += findings
+                if findings:
+                    sev_cls, sev_txt = "high", f"{findings} finding" + ("s" if findings != 1 else "")
+                else:
+                    sev_cls, sev_txt = "clear", "Clear"
+            else:
+                sev_cls, sev_txt = "", last_scan.status
+        else:
+            when, sev_cls, sev_txt = "never", "", "—"
+
+        scope = r.organization.name if r.organization_id else "Personal"
+        rows += f"""<div class="repo-row">
+          <div><div class="name">{r.name}</div><div class="sub">{r.target} · {scope}</div></div>
+          <div class="sub">{when}</div>
+          <div class="sev {sev_cls}">{sev_txt}</div>
+          <a class="mono-link" href="/repos">Review →</a>
+        </div>"""
+
+    last_scan_display = f"{latest_scan_dt:%b %d}" if latest_scan_dt else "—"
+    return render_template_string(
+        DASHBOARD_UI,
+        user_email=current_user.email,
+        repo_count=len(repos),
+        open_findings=open_findings,
+        done_count=done_count,
+        last_scan=last_scan_display,
+        rows=rows,
+    )
 
 
 @app.route("/signup", methods=["GET", "POST"])
@@ -2227,73 +2284,291 @@ def org_detail_page(org_id):
 # Auth pages (login / signup) -- minimal, matches the dark theme used by
 # the main scan UI so it doesn't feel bolted-on.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Bugatti design system — shared CSS (austere luxury: black canvas, white
+# letterspaced display, serif body, monospace labels, weight 400, transparent
+# pill buttons). Concatenated into templates (NOT an f-string) so Jinja braces
+# in the surrounding markup stay intact.
+# ---------------------------------------------------------------------------
+BUGATTI_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+:root{
+  --primary:#fff;--ink:#fff;--body:#ccc;--body-strong:#e6e6e6;--muted:#999;--muted-soft:#666;
+  --hairline:#262626;--hairline-strong:#3a3a3a;--canvas:#000;--surface-soft:#0d0d0d;
+  --surface-card:#141414;--surface-elevated:#1f1f1f;--on-primary:#000;--on-dark:#fff;
+  --link:#c3d9f3;--warning:#d4a017;--success:#5fa657;
+  --font-display:'Saira Condensed',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --font-text:'Cormorant Garamond',Garamond,'Times New Roman',serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Mono',monospace;
+  --xxs:4px;--xs:8px;--sm:12px;--md:16px;--lg:24px;--xl:40px;--xxl:64px;--section:120px;
+  --r-none:0px;--r-pill:9999px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{background:var(--canvas);color:var(--on-dark);font-family:var(--font-text);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+.display-xl{font-family:var(--font-display);font-weight:400;font-size:64px;line-height:1.1;letter-spacing:4px;text-transform:uppercase;}
+.display-lg{font-family:var(--font-display);font-weight:400;font-size:48px;line-height:1.15;letter-spacing:3px;text-transform:uppercase;}
+.display-md{font-family:var(--font-display);font-weight:400;font-size:32px;line-height:1.2;letter-spacing:2px;text-transform:uppercase;}
+.display-sm{font-family:var(--font-display);font-weight:400;font-size:24px;line-height:1.3;letter-spacing:1.5px;text-transform:uppercase;}
+.title-md{font-family:var(--font-display);font-weight:400;font-size:20px;line-height:1.3;letter-spacing:1px;text-transform:uppercase;}
+.title-sm{font-family:var(--font-display);font-weight:400;font-size:16px;line-height:1.3;letter-spacing:1.5px;text-transform:uppercase;}
+.caption{font-family:var(--font-mono);font-weight:400;font-size:11px;line-height:1.4;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+.body-md{font-family:var(--font-text);font-weight:400;font-size:18px;line-height:1.5;color:var(--body);}
+.body-sm{font-family:var(--font-text);font-weight:400;font-size:15px;line-height:1.5;color:var(--body);}
+.nav-link{font-family:var(--font-mono);font-weight:400;font-size:12px;line-height:1.4;letter-spacing:2px;text-transform:uppercase;}
+.wordmark{font-family:var(--font-display);font-weight:400;font-size:14px;letter-spacing:6px;text-transform:uppercase;color:var(--on-dark);text-decoration:none;}
+.top-nav{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 var(--xl);background:transparent;position:relative;}
+.top-nav .center{position:absolute;left:50%;transform:translateX(-50%);}
+.top-nav a{color:var(--on-dark);text-decoration:none;}
+.top-nav .nav-group{display:flex;gap:var(--lg);align-items:center;}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:14px 32px;
+  background:transparent;color:var(--on-dark);border:1px solid var(--on-dark);border-radius:var(--r-pill);
+  font-family:var(--font-mono);font-size:14px;letter-spacing:2.5px;text-transform:uppercase;
+  text-decoration:none;cursor:pointer;transition:background .25s ease,color .25s ease;}
+.btn:hover{background:var(--on-dark);color:var(--on-primary);}
+.btn-full{width:100%;}
+.text-link{color:var(--link);font-family:var(--font-text);text-decoration:underline;text-underline-offset:3px;}
+.mono-link{color:var(--muted);font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;}
+.mono-link:hover{color:var(--on-dark);}
+.field{display:flex;flex-direction:column;gap:var(--xs);}
+.field label{font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+.input{height:44px;padding:12px 0;background:transparent;color:var(--on-dark);border:none;
+  border-bottom:1px solid var(--hairline-strong);font-family:var(--font-text);font-size:18px;outline:none;
+  transition:border-color .2s ease;width:100%;}
+.input::placeholder{color:var(--muted);}
+.input:focus{border-bottom-color:var(--on-dark);}
+.card{background:var(--surface-card);border-radius:var(--r-none);padding:var(--lg);}
+.footer{background:var(--canvas);color:var(--muted);padding:var(--xxl) var(--xl);border-top:1px solid var(--hairline);}
+.container{max-width:1280px;margin:0 auto;padding:0 var(--xl);}
+.stack-lg>*+*{margin-top:var(--lg);}
+.center-text{text-align:center;}
+.muted{color:var(--muted);}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Public marketing landing (editorial grid) — served at "/" for logged-out
+# visitors. Logged-in users are redirected to /dashboard by the route.
+# ---------------------------------------------------------------------------
+LANDING_UI = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sentinel — Autonomous vulnerability intelligence</title>
+  <style>""" + BUGATTI_CSS + """
+  .hero-band{position:relative;min-height:78vh;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;background:radial-gradient(140% 100% at 50% 0%,#1c1c1c 0%,#000 55%);
+    border-bottom:1px solid var(--hairline);padding:0 var(--xl);}
+  .hero-band h1{max-width:1000px;margin:var(--md) 0 var(--lg);}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--xl);padding:var(--section) var(--xl);}
+  .model-card .thumb{aspect-ratio:16/9;margin-bottom:var(--md);background:linear-gradient(135deg,#161616,#000);border:1px solid var(--hairline);}
+  .model-card .display-sm{margin-bottom:var(--xs);}
+  .cta-band{position:relative;padding:var(--section) var(--xl);text-align:center;
+    background:radial-gradient(100% 120% at 50% 100%,#1a1a1a,#000 60%);border-top:1px solid var(--hairline);}
+  .cta-band h2{margin-bottom:var(--xl);}
+  @media(max-width:768px){.display-xl{font-size:34px;}.grid-3{grid-template-columns:1fr;padding:var(--xxl) var(--xl);}}
+  </style>
+</head>
+<body>
+  <nav class="top-nav">
+    <div class="nav-group"><span class="nav-link muted">Autonomous security</span></div>
+    <a class="wordmark center" href="/">Sentinel</a>
+    <div class="nav-group"><a class="nav-link" href="/login">Sign in</a></div>
+  </nav>
+
+  <header class="hero-band">
+    <p class="caption">Continuous · Autonomous · Silent</p>
+    <h1 class="display-xl">The perimeter,<br>rewritten</h1>
+    <p class="body-md" style="max-width:480px;">A security agent that reads your code the way an attacker would — then closes the door first.</p>
+    <div style="margin-top:var(--xl);display:flex;gap:var(--md);">
+      <a class="btn" href="/signup">Request access</a>
+      <a class="btn" href="/login" style="border-color:var(--hairline-strong);color:var(--muted);">Sign in</a>
+    </div>
+  </header>
+
+  <section class="grid-3">
+    <article class="model-card">
+      <div class="thumb"></div>
+      <p class="caption">Code · SAST</p>
+      <h3 class="display-sm">Source analysis</h3>
+      <p class="body-sm">Taint tracking across your own code, tuned for the languages you actually ship.</p>
+    </article>
+    <article class="model-card">
+      <div class="thumb"></div>
+      <p class="caption">Dependencies · SCA</p>
+      <h3 class="display-sm">Supply chain</h3>
+      <p class="body-sm">Full transitive graphs, enriched with live CVE and exploit-maturity signals.</p>
+    </article>
+    <article class="model-card">
+      <div class="thumb"></div>
+      <p class="caption">Remediation · PR</p>
+      <h3 class="display-sm">Autonomous fixes</h3>
+      <p class="body-sm">The patch, the test, the pull request — generated, reviewed, and ready to merge.</p>
+    </article>
+  </section>
+
+  <section class="cta-band">
+    <p class="caption">Ready when you are</p>
+    <h2 class="display-lg">Discover Sentinel</h2>
+    <a class="btn" href="/signup">Request access</a>
+  </section>
+
+  <footer class="footer center-text">
+    <span class="wordmark">Sentinel</span>
+    <p class="body-sm muted" style="margin-top:var(--md);">© 2026 Sentinel Security. All rights reserved.</p>
+  </footer>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# Authenticated overview dashboard (app-a). Stats + accessible-repo rows.
+# Vars: user_email, repo_count, open_findings, done_count, last_scan, rows.
+# ---------------------------------------------------------------------------
+DASHBOARD_UI = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sentinel — Overview</title>
+  <style>""" + BUGATTI_CSS + """
+  .shell{display:grid;grid-template-columns:240px 1fr;min-height:100vh;}
+  .sidebar{border-right:1px solid var(--hairline);padding:var(--lg) 0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;}
+  .sidebar .brand{padding:var(--md) var(--lg) var(--xl);}
+  .side-nav{display:flex;flex-direction:column;}
+  .side-nav a{padding:14px var(--lg);font-family:var(--font-mono);font-size:12px;letter-spacing:2px;
+    text-transform:uppercase;color:var(--muted);text-decoration:none;border-left:2px solid transparent;}
+  .side-nav a.active{color:var(--on-dark);border-left-color:var(--on-dark);}
+  .side-nav a:hover{color:var(--on-dark);}
+  .side-foot{margin-top:auto;padding:var(--lg);border-top:1px solid var(--hairline);}
+  .main{padding:var(--xl);}
+  .page-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:var(--xl);}
+  .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--hairline);margin-bottom:var(--xxl);}
+  .stat{padding:var(--lg);border-right:1px solid var(--hairline);}
+  .stat:last-child{border-right:none;}
+  .stat .display-md{margin:var(--xs) 0;}
+  .stat .warn{color:var(--warning);}.stat .ok{color:var(--success);}
+  .list-head,.repo-row{display:grid;grid-template-columns:2fr 1fr 1fr 120px;gap:var(--lg);align-items:center;
+    padding:var(--lg) 0;border-bottom:1px solid var(--hairline);}
+  .list-head{border-bottom-color:var(--hairline-strong);}
+  .list-head span{font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--muted-soft);}
+  .repo-row .name{font-family:var(--font-display);font-size:18px;letter-spacing:1px;text-transform:uppercase;}
+  .repo-row .sub{font-family:var(--font-mono);font-size:11px;letter-spacing:1px;color:var(--muted);}
+  .sev{font-family:var(--font-mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;}
+  .sev.high{color:var(--warning);}.sev.clear{color:var(--success);}
+  .empty{padding:var(--xxl) 0;text-align:center;}
+  @media(max-width:900px){.shell{grid-template-columns:1fr;}
+    .sidebar{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;}
+    .side-foot{display:none;}.stat-grid{grid-template-columns:1fr 1fr;}
+    .list-head{display:none;}.repo-row{grid-template-columns:1fr 1fr;}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="wordmark brand" href="/">Sentinel</a>
+      <nav class="side-nav">
+        <a href="/dashboard" class="active">Overview</a>
+        <a href="/repos">Repositories</a>
+        <a href="/history">History</a>
+        <a href="/scan-console">New scan</a>
+        <a href="/account">Account</a>
+        <a href="/logout">Log out</a>
+      </nav>
+      <div class="side-foot">
+        <p class="caption">Signed in as</p>
+        <p class="body-sm" style="color:var(--on-dark);">{{ user_email }}</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <p class="caption">Workspace</p>
+          <h1 class="display-lg">Overview</h1>
+        </div>
+        <a class="btn" href="/scan-console">New scan</a>
+      </div>
+
+      <section class="stat-grid">
+        <div class="stat"><p class="caption">Repositories</p><div class="display-md">{{ repo_count }}</div></div>
+        <div class="stat"><p class="caption">Open findings</p><div class="display-md warn">{{ open_findings }}</div></div>
+        <div class="stat"><p class="caption">Scans complete</p><div class="display-md ok">{{ done_count }}</div></div>
+        <div class="stat"><p class="caption">Last scan</p><div class="display-md">{{ last_scan }}</div></div>
+      </section>
+
+      <div class="list-head"><span>Repository</span><span>Last scan</span><span>Severity</span><span></span></div>
+      {% if rows %}{{ rows | safe }}{% else %}
+      <div class="empty">
+        <p class="caption">No repositories yet</p>
+        <p class="body-md" style="margin:var(--md) 0 var(--lg);">Run your first scan to populate the overview.</p>
+        <a class="btn" href="/scan-console">New scan</a>
+      </div>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>"""
+
+
 AUTH_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ 'Sign up' if mode == 'signup' else 'Log in' }} — Vulnerability Scanner</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    }
-    .card {
-      width: 320px; padding: 2rem; background: #0e1219; border: 1px solid #1c2130; border-radius: 8px;
-    }
-    h1 { font-size: 1.1rem; font-weight: 500; margin-bottom: 1.5rem; }
-    label { display: block; font-size: 0.8rem; color: #8890a0; margin-bottom: 0.3rem; margin-top: 1rem; }
-    input {
-      width: 100%; padding: 0.6rem; background: #080b10; border: 1px solid #1c2130; border-radius: 4px;
-      color: #c8cdd8; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem;
-    }
-    button {
-      width: 100%; margin-top: 1.5rem; padding: 0.7rem; background: #3b82f6; border: none; border-radius: 4px;
-      color: white; font-weight: 500; cursor: pointer; font-size: 0.9rem;
-    }
-    button:hover { background: #2563eb; }
-    .error { color: #ef4444; font-size: 0.8rem; margin-top: 1rem; }
-    .switch { margin-top: 1.2rem; font-size: 0.8rem; color: #8890a0; text-align: center; }
-    .switch a { color: #3b82f6; text-decoration: none; }
-    .oauth-row { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1.2rem; }
-    .oauth-btn {
-      display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-      width: 100%; padding: 0.6rem; background: #161b26; border: 1px solid #1c2130; border-radius: 4px;
-      color: #c8cdd8; font-size: 0.85rem; text-decoration: none; font-family: 'Inter', sans-serif;
-    }
-    .oauth-btn:hover { background: #1c2130; }
-    .divider { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.4rem; color: #8890a0; font-size: 0.75rem; }
-    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #1c2130; }
+  <title>{{ 'Sign up' if mode == 'signup' else 'Sign in' }} — Sentinel</title>
+  <style>""" + BUGATTI_CSS + """
+    .auth-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      padding:var(--xl);background:radial-gradient(120% 90% at 50% 0%,#141414 0%,#000 55%);}
+    .auth-card{width:100%;max-width:420px;}
+    .toggle{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--hairline-strong);
+      border-radius:var(--r-pill);overflow:hidden;margin-bottom:var(--xxl);}
+    .toggle a{padding:12px 0;text-align:center;font-family:var(--font-mono);font-size:12px;letter-spacing:2px;
+      text-transform:uppercase;color:var(--muted);text-decoration:none;}
+    .toggle a.active{background:var(--on-dark);color:var(--on-primary);}
+    .auth-card h1{text-align:center;margin-bottom:var(--xl);}
+    .oauth-row{display:flex;gap:var(--sm);margin-bottom:var(--lg);}
+    .oauth-row a{flex:1;padding:14px 0;border-color:var(--hairline-strong);color:var(--body);font-size:12px;letter-spacing:2px;}
+    .divider{display:flex;align-items:center;gap:var(--md);margin-bottom:var(--lg);}
+    .divider .line{flex:1;border-top:1px solid var(--hairline);}
+    .error{font-family:var(--font-mono);font-size:11px;letter-spacing:1px;color:var(--warning);text-align:center;}
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>{{ 'Create an account' if mode == 'signup' else 'Log in' }}</h1>
-    {% if google_enabled or github_enabled %}
-    <div class="oauth-row">
-      {% if google_enabled %}<a class="oauth-btn" href="/auth/google">Continue with Google</a>{% endif %}
-      {% if github_enabled %}<a class="oauth-btn" href="/auth/github">Continue with GitHub</a>{% endif %}
-    </div>
-    <div class="divider">or</div>
-    {% endif %}
-    <form method="POST">
-      <label>Email</label>
-      <input type="email" name="email" required autofocus>
-      <label>Password</label>
-      <input type="password" name="password" required>
-      {% if error %}<div class="error">{{ error }}</div>{% endif %}
-      <button type="submit">{{ 'Sign up' if mode == 'signup' else 'Log in' }}</button>
-    </form>
-    <div class="switch">
-      {% if mode == 'signup' %}
-        Already have an account? <a href="/login">Log in</a>
-      {% else %}
-        No account? <a href="/signup">Sign up</a>
+  <nav class="top-nav"><a class="wordmark center" href="/">Sentinel</a></nav>
+  <main class="auth-wrap">
+    <div class="auth-card">
+      <div class="toggle">
+        <a href="/login" class="{{ 'active' if mode != 'signup' else '' }}">Sign in</a>
+        <a href="/signup" class="{{ 'active' if mode == 'signup' else '' }}">Sign up</a>
+      </div>
+
+      <h1 class="display-md">{{ 'Create account' if mode == 'signup' else 'Sign in' }}</h1>
+
+      {% if google_enabled or github_enabled %}
+      <div class="oauth-row">
+        {% if google_enabled %}<a class="btn" href="/auth/google">Google</a>{% endif %}
+        {% if github_enabled %}<a class="btn" href="/auth/github">GitHub</a>{% endif %}
+      </div>
+      <div class="divider"><span class="line"></span><span class="caption">Or</span><span class="line"></span></div>
       {% endif %}
+
+      <form method="POST" class="stack-lg">
+        <div class="field">
+          <label>Email</label>
+          <input class="input" type="email" name="email" placeholder="you@company.com" required autofocus>
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input class="input" type="password" name="password" placeholder="••••••••" required>
+        </div>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <button type="submit" class="btn btn-full">{{ 'Create account' if mode == 'signup' else 'Continue' }}</button>
+        <p class="caption center-text">Protected by hardware-key MFA</p>
+      </form>
     </div>
-  </div>
+  </main>
 </body>
 </html>"""
 
@@ -2331,7 +2606,7 @@ ACCOUNT_UI = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <a class="back" href="/">&larr; New scan</a>
+  <a class="back" href="/scan-console">&larr; New scan</a>
   <h1 style="margin-top:1rem;">Account Settings</h1>
 
   {% with messages = get_flashed_messages() %}
@@ -2409,7 +2684,7 @@ HISTORY_UI = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <a class="back" href="/">&larr; New scan</a>
+  <a class="back" href="/scan-console">&larr; New scan</a>
   <a class="back" href="/orgs" style="margin-left:1rem;">Organizations</a>
   <h1>Scan History</h1>
   <table>
@@ -2441,7 +2716,7 @@ METRICS_UI = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <a class="back" href="/">&larr; New scan</a>
+  <a class="back" href="/scan-console">&larr; New scan</a>
   <a class="back" href="/admin/scans" style="margin-left:1rem;">Raw scan list</a>
   <a class="back" href="/admin/metrics?format=json" style="margin-left:1rem;">JSON</a>
   <h1>Scan Metrics</h1>
@@ -2513,7 +2788,7 @@ REPOS_UI = """<!DOCTYPE html>
       <a class="history-link" href="/orgs">organizations</a>
       <a class="history-link" href="/history">history</a>
       <a class="history-link" href="/logout">log out</a>
-      <a class="new-scan" href="/">+ New scan</a>
+      <a class="new-scan" href="/scan-console">+ New scan</a>
     </div>
   </div>
 
@@ -2523,7 +2798,7 @@ REPOS_UI = """<!DOCTYPE html>
     {{ rows | safe }}
   </table>
   {% else %}
-  <div class="empty">No repos yet -- run a scan to add one, or <a href="/" style="color:#3b82f6;">start here</a>.</div>
+  <div class="empty">No repos yet -- run a scan to add one, or <a href="/scan-console" style="color:#3b82f6;">start here</a>.</div>
   {% endif %}
 </body>
 </html>"""

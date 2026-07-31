@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL — Landing A</title>
+<link rel="stylesheet" href="assets/bugatti.css">
+<style>
+  .hero {
+    position: relative;
+    min-height: 92vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center;
+    background:
+      radial-gradient(120% 90% at 50% 10%, #1a1a1a 0%, #000 60%),
+      linear-gradient(180deg, #000 0%, #050505 100%);
+    overflow: hidden;
+  }
+  .hero::after { /* faint horizon line, photographic depth */
+    content: ""; position: absolute; left: 0; right: 0; bottom: 22%;
+    height: 1px; background: linear-gradient(90deg, transparent, #2a2a2a 50%, transparent);
+  }
+  .hero h1 { max-width: 900px; margin: var(--lg) 0; }
+  .hero .body-md { max-width: 520px; }
+  .specs {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--hairline);
+  }
+  .spec {
+    padding: var(--xl) var(--lg);
+    border-right: 1px solid var(--hairline);
+  }
+  .spec:last-child { border-right: none; }
+  .spec .display-md { margin-bottom: var(--xs); }
+  @media (max-width: 768px) {
+    .display-xl { font-size: 34px; }
+    .specs { grid-template-columns: 1fr 1fr; }
+    .spec { border-bottom: 1px solid var(--hairline); }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <div class="nav-group"><a class="nav-link" href="#">Menu</a></div>
+  <a class="wordmark center" href="#">Sentinel</a>
+  <div class="nav-group">
+    <a class="nav-link" href="auth-a.html">Sign in</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <p class="caption">Autonomous vulnerability intelligence</p>
+  <h1 class="display-xl">Every commit,<br>audited in silence</h1>
+  <p class="body-md">Sentinel scans your repositories, resolves transitive CVEs, and opens the fix before your team wakes.</p>
+  <div style="margin-top: var(--xl); display:flex; gap: var(--md);">
+    <a class="btn" href="auth-a.html">Request access</a>
+  </div>
+</header>
+
+<section class="specs">
+  <div class="spec">
+    <div class="display-md">4.2M</div>
+    <div class="caption">Dependencies indexed</div>
+  </div>
+  <div class="spec">
+    <div class="display-md">11s</div>
+    <div class="caption">Median scan time</div>
+  </div>
+  <div class="spec">
+    <div class="display-md">98.4%</div>
+    <div class="caption">Fix acceptance rate</div>
+  </div>
+  <div class="spec">
+    <div class="display-md">0</div>
+    <div class="caption">False-positive noise</div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--lg);">
+    <span class="body-sm muted">© 2026 Sentinel Security. All rights reserved.</span>
+    <span class="wordmark">Sentinel</span>
+  </div>
+</footer>
+
+</body>
+</html>

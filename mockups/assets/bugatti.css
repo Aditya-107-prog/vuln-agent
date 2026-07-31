@@ -1,0 +1,179 @@
+/* ============================================================
+   BUGATTI DESIGN SYSTEM — shared tokens + primitives
+   Austere luxury: pure-black canvas, white letterspaced display,
+   serif body, monospace labels. No accent color (except link ice-blue).
+   Weight 400 everywhere. Buttons = transparent pill + 1px outline.
+   Fonts: documented open-source substitutes.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* colors */
+  --primary: #ffffff;
+  --ink: #ffffff;
+  --body: #cccccc;
+  --body-strong: #e6e6e6;
+  --muted: #999999;
+  --muted-soft: #666666;
+  --hairline: #262626;
+  --hairline-strong: #3a3a3a;
+  --canvas: #000000;
+  --surface-soft: #0d0d0d;
+  --surface-card: #141414;
+  --surface-elevated: #1f1f1f;
+  --on-primary: #000000;
+  --on-dark: #ffffff;
+  --link: #c3d9f3;
+  --warning: #d4a017;
+  --success: #5fa657;
+
+  /* type families (Bugatti substitutes) */
+  --font-display: 'Saira Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-text: 'Cormorant Garamond', Garamond, 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
+
+  /* spacing */
+  --xxs: 4px;  --xs: 8px;  --sm: 12px;  --md: 16px;
+  --lg: 24px;  --xl: 40px; --xxl: 64px; --section: 120px;
+
+  /* radius */
+  --r-none: 0px;
+  --r-pill: 9999px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--canvas);
+  color: var(--on-dark);
+  font-family: var(--font-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- typography scale ---- */
+.display-xl { font-family: var(--font-display); font-weight: 400; font-size: 64px; line-height: 1.1;  letter-spacing: 4px;   text-transform: uppercase; }
+.display-lg { font-family: var(--font-display); font-weight: 400; font-size: 48px; line-height: 1.15; letter-spacing: 3px;   text-transform: uppercase; }
+.display-md { font-family: var(--font-display); font-weight: 400; font-size: 32px; line-height: 1.2;  letter-spacing: 2px;   text-transform: uppercase; }
+.display-sm { font-family: var(--font-display); font-weight: 400; font-size: 24px; line-height: 1.3;  letter-spacing: 1.5px; text-transform: uppercase; }
+.title-md   { font-family: var(--font-display); font-weight: 400; font-size: 20px; line-height: 1.3;  letter-spacing: 1px;   text-transform: uppercase; }
+.title-sm   { font-family: var(--font-display); font-weight: 400; font-size: 16px; line-height: 1.3;  letter-spacing: 1.5px; text-transform: uppercase; }
+.caption    { font-family: var(--font-mono);    font-weight: 400; font-size: 11px; line-height: 1.4;  letter-spacing: 2px;   text-transform: uppercase; color: var(--muted); }
+.body-md    { font-family: var(--font-text);    font-weight: 400; font-size: 18px; line-height: 1.5;  color: var(--body); }
+.body-sm    { font-family: var(--font-text);    font-weight: 400; font-size: 15px; line-height: 1.5;  color: var(--body); }
+.nav-link   { font-family: var(--font-mono);    font-weight: 400; font-size: 12px; line-height: 1.4;  letter-spacing: 2px;   text-transform: uppercase; }
+
+/* Cormorant reads small; bump the base body a touch for legibility */
+
+/* ---- wordmark ---- */
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 14px;
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  color: var(--on-dark);
+  text-decoration: none;
+}
+
+/* ---- top nav ---- */
+.top-nav {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--xl);
+  background: transparent;
+}
+.top-nav .center { position: absolute; left: 50%; transform: translateX(-50%); }
+.top-nav .nav-link, .top-nav a { color: var(--on-dark); text-decoration: none; }
+.top-nav .nav-group { display: flex; gap: var(--lg); align-items: center; }
+
+/* ---- buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  padding: 14px 32px;
+  background: transparent;
+  color: var(--on-dark);
+  border: 1px solid var(--on-dark);
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .25s ease, color .25s ease;
+}
+.btn:active { background: var(--on-dark); color: var(--on-primary); }
+.btn-icon {
+  width: 40px; height: 40px; padding: 0;
+  border-radius: var(--r-pill);
+}
+.btn-full { width: 100%; }
+
+.text-link {
+  color: var(--link);
+  font-family: var(--font-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.mono-link {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.mono-link:active { color: var(--on-dark); }
+
+/* ---- inputs ---- */
+.field { display: flex; flex-direction: column; gap: var(--xs); }
+.field label {
+  font-family: var(--font-mono);
+  font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted);
+}
+.input {
+  height: 44px;
+  padding: 12px 0;
+  background: transparent;
+  color: var(--on-dark);
+  border: none;
+  border-bottom: 1px solid var(--hairline-strong);
+  font-family: var(--font-text);
+  font-size: 18px;
+  outline: none;
+  transition: border-color .2s ease;
+}
+.input::placeholder { color: var(--muted); }
+.input:focus { border-bottom-color: var(--on-dark); }
+
+/* ---- surfaces ---- */
+.card {
+  background: var(--surface-card);
+  border-radius: var(--r-none);
+  padding: var(--lg);
+}
+.hairline { border: none; border-top: 1px solid var(--hairline); }
+
+/* ---- footer ---- */
+.footer {
+  background: var(--canvas);
+  color: var(--muted);
+  padding: var(--xxl) var(--xl);
+  border-top: 1px solid var(--hairline);
+}
+
+/* ---- helpers ---- */
+.container { max-width: 1280px; margin: 0 auto; padding: 0 var(--xl); }
+.full-bleed { width: 100%; }
+.stack-lg > * + * { margin-top: var(--lg); }
+.center-text { text-align: center; }
+.muted { color: var(--muted); }
+a { color: inherit; }
