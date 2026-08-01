@@ -154,14 +154,15 @@ network):
   | `GRAFANA_CLOUD_PROM_URL` | `https://prometheus-prod-NN-REGION.grafana.net/api/prom/push` |
   | `GRAFANA_CLOUD_PROM_USER` | numeric instance ID |
   | `GRAFANA_CLOUD_PROM_PASSWORD` | `glc_...` access policy token |
-  | `VULN_AGENT_TARGET` | *(optional)* `vuln-agent.railway.internal:$PORT` |
+  | `VULN_AGENT_TARGET` | *(optional)* `anchor-backend.railway.internal:5000` |
 
 **4. Confirm the target port**
 
-`VULN_AGENT_TARGET` defaults to `vuln-agent.railway.internal:8080`. Railway
-assigns `$PORT` per service and it is **not** 5000, so check the web
-service's `PORT` variable and override if it differs. The hostname is the
-Railway **service** name.
+`VULN_AGENT_TARGET` defaults to `anchor-backend.railway.internal:5000`. The
+hostname is the Railway **service** name, and the port is whatever the web
+service listens on — `PORT` is set explicitly to 5000 there rather than
+left to Railway's per-service assignment, so the two match. Override only
+if you rename the service or change its `PORT`.
 
 **5. Verify**
 

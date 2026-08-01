@@ -23,15 +23,16 @@ prometheus.scrape "vuln_agent" {
   targets = [
     {
       // *.railway.internal resolves only inside the Railway project's
-      // private network. If you renamed the web service in Railway, set
-      // VULN_AGENT_TARGET to "<new-name>.railway.internal:8080" -- the
-      // hostname is the SERVICE name, not the repo or image name.
+      // private network, and the hostname is the SERVICE name -- not the
+      // repo or image name. The web service in project ANCHOR is called
+      // "anchor-backend", so that is what this resolves.
       //
-      // Port note: on Railway the app listens on $PORT, which Railway
-      // injects per-service and is NOT 5000. Private-network requests must
-      // use that same port, so this defaults to 8080 (Railway's usual
-      // assignment) and stays overridable.
-      __address__ = coalesce(sys.env("VULN_AGENT_TARGET"), "vuln-agent.railway.internal:8080"),
+      // Port note: private-network requests must use the port the app
+      // actually listens on. PORT is set explicitly to 5000 on the web
+      // service (Dockerfile binds [::]:${PORT:-5000}), so this matches it.
+      // Override VULN_AGENT_TARGET if either the service name or PORT
+      // changes.
+      __address__ = coalesce(sys.env("VULN_AGENT_TARGET"), "anchor-backend.railway.internal:5000"),
       job         = "vuln-agent",
       env         = coalesce(sys.env("DEPLOY_ENV"), "production"),
     },
