@@ -88,6 +88,109 @@ Input (GitHub URL or local path)
                                report     (Groq LLM → HTML)
 ```
 
+## Observability
+
+### Local (Prometheus + Grafana)
+
+```bash
+docker compose up -d
+```
+
+Prometheus `localhost:9090`, Grafana `localhost:3000` (`admin`/`admin`). The
+`vuln-agent` dashboard and datasource are pre-provisioned. `web_app.py` must
+already be running on port 5000 — compose only scrapes it, it does not run it.
+
+`/metrics` is gated by a bearer token. Set `METRICS_TOKEN` in `.env` to the
+same literal value in `observability/prometheus.yml`, or leave it unset to
+run the endpoint open locally.
+
+### Production (Railway → Grafana Cloud)
+
+Railway ignores `docker-compose.yml`, so production uses a second Railway
+service running [Grafana Alloy](https://grafana.com/docs/alloy/), which
+scrapes `/metrics` over Railway's **private** network and `remote_write`s to
+Grafana Cloud. `/metrics` is never exposed publicly, and metrics keep
+flowing whether or not your laptop is on.
+
+```
+vuln-agent (web)  ──private net──>  alloy  ──remote_write──>  Grafana Cloud
+   /metrics                        scrape                       dashboards
+   + METRICS_TOKEN                 30s                          + alerts
+```
+
+**1. Generate a token**
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Set it as `METRICS_TOKEN` on **both** Railway services. Mismatched values
+make every scrape return 404 — that's the intended failure mode (a 401 would
+confirm the endpoint exists), so it fails silently. Check
+`up{job="vuln-agent"}` in Grafana if no data appears.
+
+**2. Get Grafana Cloud credentials**
+
+Free tier is enough (10k series; this app emits well under 100). In Grafana
+Cloud → your stack → Prometheus → **Send Metrics**, copy the remote-write
+URL, the numeric username, and create an access-policy token scoped to
+`metrics:write`.
+
+**3. Create the Alloy service**
+
+In the **same Railway project** as vuln-agent (same project = same private
+network):
+
+- New service → same repo
+- Settings → **Root Directory** = `observability/alloy`
+  (skip this and Railway builds the repo-root Dockerfile — a second copy of
+  the web app)
+- Do **not** assign a public domain. Alloy only needs outbound access.
+- Variables:
+
+  | Variable | Value |
+  |---|---|
+  | `METRICS_TOKEN` | same value as the web service |
+  | `GRAFANA_CLOUD_PROM_URL` | `https://prometheus-prod-NN-REGION.grafana.net/api/prom/push` |
+  | `GRAFANA_CLOUD_PROM_USER` | numeric instance ID |
+  | `GRAFANA_CLOUD_PROM_PASSWORD` | `glc_...` access policy token |
+  | `VULN_AGENT_TARGET` | *(optional)* `anchor-backend.railway.internal:5000` |
+
+**4. Confirm the target port**
+
+`VULN_AGENT_TARGET` defaults to `anchor-backend.railway.internal:5000`. The
+hostname is the Railway **service** name, and the port is whatever the web
+service listens on — `PORT` is set explicitly to 5000 there rather than
+left to Railway's per-service assignment, so the two match. Override only
+if you rename the service or change its `PORT`.
+
+**5. Verify**
+
+In Grafana Cloud → Explore:
+
+```promql
+up{job="vuln-agent"}                # 1 = scrape succeeding
+vuln_agent_scans_total              # app counters arriving
+up{job="alloy"}                     # Alloy itself is alive
+```
+
+If `up{job="alloy"}` reports but `up{job="vuln-agent"}` is absent, Alloy is
+running and the scrape is failing — almost always a wrong `$PORT` in
+`VULN_AGENT_TARGET` or a mismatched `METRICS_TOKEN`.
+
+**Notes**
+
+- Alloy runs in agent mode with its WAL in `/tmp` — no Railway volume
+  needed, since Grafana Cloud holds the durable copy. A redeploy loses at
+  most a few minutes of buffered samples.
+- The app binds `[::]` rather than `0.0.0.0` because Railway's private
+  network is IPv6-only. An IPv4-only listener is unreachable at
+  `*.railway.internal`.
+- `/metrics` re-queries Postgres on every scrape
+  (`tools/db_metrics_collector.py`), which is why the endpoint is
+  authenticated rather than left open — and why `scrape_interval` is 30s
+  rather than something aggressive.
+
 ## Limitations
 
 - Python repositories only (no web/network scanning)

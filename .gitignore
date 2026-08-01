@@ -95,6 +95,10 @@ desktop.ini
 osv-scanner
 osv-scanner.exe
 
+# Local input for scan_requirements.py -- whatever `pip freeze` printed on
+# one machine, so it's per-developer scratch, not shared state.
+full_freeze.txt
+
 # ==========================
 # Temporary Files
 # ==========================
@@ -106,10 +110,10 @@ temp/
 # Generated Reports
 # Keep only sample reports in examples/
 # ==========================
-reports/
 output/
 results/
 scan_results/
+reports/
 
 # ==========================
 # Node (if frontend exists)

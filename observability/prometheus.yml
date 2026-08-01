@@ -1,8 +1,31 @@
 global:
-  scrape_interval: 1m
+  # 30s to match the Railway/Alloy pipeline (observability/alloy/config.alloy),
+  # so a panel looks the same locally as it does in Grafana Cloud.
+  scrape_interval: 30s
 
 scrape_configs:
   - job_name: "vuln-agent"
+    # Must stay under scrape_interval. Generous because /metrics does real
+    # Postgres work per scrape (tools/db_metrics_collector.py).
+    scrape_timeout: 10s
+
+    # /metrics is gated by a bearer token (METRICS_TOKEN in web_app.py).
+    #
+    # This value is hardcoded, NOT an env var: Prometheus does not expand
+    # ${VARS} in its config file, and docker-compose interpolation applies
+    # only to compose YAML, not to the contents of a mounted file. So the
+    # token has to be literal here.
+    #
+    # That's acceptable only because this token is local-dev-only -- keep
+    # it matching METRICS_TOKEN in your .env, and never reuse it on
+    # Railway (Railway's copy is a service variable read by Alloy).
+    #
+    # If METRICS_TOKEN is unset, web_app.py leaves /metrics open and this
+    # header is ignored, so local scraping works either way.
+    authorization:
+      type: Bearer
+      credentials: "local-dev-only-metrics-token"
+
     static_configs:
       # host.docker.internal resolves to the Windows host machine from
       # inside the container -- works out of the box on Docker Desktop

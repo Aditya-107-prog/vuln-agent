@@ -1,0 +1,31 @@
+# Auto-generated from actual project imports.
+# Review before using -- see any UNRESOLVED lines below.
+
+gunicorn
+alembic==1.18.5
+APScheduler==3.11.3
+Authlib==1.7.2
+boto3==1.43.18
+cryptography==46.0.7
+cvss==3.6
+Flask==3.1.3
+Flask-Login==0.6.3
+Flask-Migrate==4.1.0
+Flask-SQLAlchemy==3.1.1
+groq==0.37.1
+langfuse==4.13.0
+langgraph==1.2.5
+Markdown==3.10.2
+prometheus_client==0.26.0
+PyGithub==2.9.1
+python-dotenv==1.1.1
+requests==2.34.2
+SQLAlchemy==2.0.41
+Werkzeug==3.1.8
+
+# --- needs manual review ---
+# 'google' namespace import found -- check which
+# google-* package(s) you actually need (e.g. google-generativeai)
+# UNRESOLVED (add manually, check exact pip name): googleapiclient
+# UNRESOLVED (add manually, check exact pip name): sentry_sdk
+# UNRESOLVED (add manually, check exact pip name): tools

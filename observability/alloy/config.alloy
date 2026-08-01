@@ -1,0 +1,106 @@
+// observability/alloy/config.alloy
+// -----------------------------------------------------------------------------
+// Grafana Alloy config for the Railway "alloy" service.
+//
+// Job: scrape vuln-agent's /metrics over Railway's PRIVATE network and
+// remote_write the samples up to Grafana Cloud. Nothing here listens for
+// metrics traffic from the internet, and /metrics never needs a public
+// route -- which matters because DBBackedCollector runs live Postgres
+// queries on every scrape (see tools/db_metrics_collector.py).
+//
+// Alloy runs in "agent mode" here: it forwards straight to Grafana Cloud
+// and keeps only a small on-disk WAL for retry buffering. That WAL lives
+// in /tmp (ephemeral) on purpose -- losing it on redeploy costs at most a
+// few minutes of buffered samples, whereas a Railway volume would cost
+// money to protect data Grafana Cloud already has.
+//
+// Every value below comes from a Railway service variable -- see
+// .env.example and the README "Metrics to Grafana Cloud" section.
+// -----------------------------------------------------------------------------
+
+// --- scrape: vuln-agent over the private network -----------------------------
+prometheus.scrape "vuln_agent" {
+  targets = [
+    {
+      // *.railway.internal resolves only inside the Railway project's
+      // private network, and the hostname is the SERVICE name -- not the
+      // repo or image name. The web service in project ANCHOR is called
+      // "anchor-backend", so that is what this resolves.
+      //
+      // Port note: private-network requests must use the port the app
+      // actually listens on. PORT is set explicitly to 5000 on the web
+      // service (Dockerfile binds [::]:${PORT:-5000}), so this matches it.
+      // Override VULN_AGENT_TARGET if either the service name or PORT
+      // changes.
+      __address__ = coalesce(sys.env("VULN_AGENT_TARGET"), "anchor-backend.railway.internal:5000"),
+      job         = "vuln-agent",
+      env         = coalesce(sys.env("DEPLOY_ENV"), "production"),
+    },
+  ]
+
+  metrics_path = "/metrics"
+
+  // 30s rather than the local compose file's 1m: fine-grained enough to
+  // see a scan spike, still only ~2 scrapes/min of Postgres load from
+  // DBBackedCollector.
+  scrape_interval = "30s"
+
+  // Generous relative to the interval because /metrics does real DB work
+  // on a cold connection pool. Must stay < scrape_interval.
+  scrape_timeout = "10s"
+
+  // Matches the METRICS_TOKEN bearer check in web_app.py's /metrics
+  // route. Set the SAME value on both Railway services or every scrape
+  // silently 404s.
+  bearer_token = sys.env("METRICS_TOKEN")
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// --- ship: Grafana Cloud -----------------------------------------------------
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    // From Grafana Cloud -> your stack -> Prometheus -> "Send Metrics".
+    // Looks like https://prometheus-prod-NN-REGION.grafana.net/api/prom/push
+    url = sys.env("GRAFANA_CLOUD_PROM_URL")
+
+    basic_auth {
+      // Username is the numeric Grafana Cloud instance ID, NOT your email.
+      // Password is a Cloud Access Policy token with metrics:write scope --
+      // create a dedicated one for this service so it can be revoked
+      // without touching anything else.
+      username = sys.env("GRAFANA_CLOUD_PROM_USER")
+      password = sys.env("GRAFANA_CLOUD_PROM_PASSWORD")
+    }
+
+    // Keep the retry buffer bounded. Under a long Grafana Cloud outage
+    // Alloy drops the oldest samples rather than growing /tmp until the
+    // Railway container is OOM-killed.
+    queue_config {
+      capacity           = 2500
+      max_shards         = 4
+      max_samples_per_send = 500
+    }
+  }
+
+  // Applied at write time, so they're queryable in Grafana Cloud without
+  // touching app code. Lets one Grafana stack hold staging + production
+  // side by side: filter with {env="production"}.
+  external_labels = {
+    service = "vuln-agent",
+    env     = coalesce(sys.env("DEPLOY_ENV"), "production"),
+  }
+}
+
+// --- self-monitoring ---------------------------------------------------------
+// Alloy's own metrics, shipped up the same pipe. Without this a silently
+// failing scraper looks identical to an idle app -- both render as "no
+// data" in Grafana. Watch prometheus_remote_write_wal_samples_appended_total
+// and up{job="alloy"} to tell the two apart.
+prometheus.exporter.self "alloy" {}
+
+prometheus.scrape "alloy_self" {
+  targets         = prometheus.exporter.self.alloy.targets
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}

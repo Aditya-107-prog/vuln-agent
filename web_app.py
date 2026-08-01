@@ -16,13 +16,14 @@ import sys
 import time
 import uuid
 import json
+import hmac
 import threading
 import zipfile
 import shutil
 import tempfile
 from functools import wraps
 from datetime import datetime, timezone, timedelta
-from flask import Flask, request, jsonify, Response, send_file, render_template_string, redirect, url_for, flash
+from flask import Flask, request, jsonify, Response, send_file, render_template_string, redirect, url_for, flash, abort
 from flask_login import (
     LoginManager, login_user, logout_user, login_required, current_user
 )
@@ -79,6 +80,20 @@ SLACK_NOTIFICATIONS_TOTAL = Counter(
     # outcome: "sent" | "failed" | "skipped_not_connected"
 )
 
+# Shared secret the /metrics scraper must present as "Authorization:
+# Bearer <token>". Unset means the endpoint stays open, which keeps the
+# zero-config local docker-compose flow working -- but see the startup
+# warning below: /metrics is NOT harmless to expose in this app, because
+# DBBackedCollector runs live Postgres queries on every scrape.
+METRICS_TOKEN = os.environ.get("METRICS_TOKEN")
+
+if not METRICS_TOKEN:
+    logger.warning(
+        "[metrics] METRICS_TOKEN is not set -- /metrics is UNAUTHENTICATED. "
+        "Fine for local docker-compose; set it before any deployment that "
+        "is reachable from the internet."
+    )
+
 # --- Sentry (error tracking) -------------------------------------------------
 # Purely opt-in via env var -- if SENTRY_DSN isn't set, sentry_sdk.init()
 # is simply never called and the app behaves exactly as before. This
@@ -107,6 +122,29 @@ else:
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB upload limit
+
+# Behind a TLS-terminating proxy (Railway, any reverse proxy), the request
+# reaching gunicorn is plain HTTP -- so url_for(..., _external=True) would
+# build http:// URLs. That silently breaks OAuth: Google rejects non-https
+# redirect_uris, and both providers require an exact match against the
+# registered callback. Trusting X-Forwarded-Proto/Host fixes the scheme.
+# Gated on an env var so a direct-to-gunicorn local run (no proxy in front)
+# doesn't trust client-supplied X-Forwarded-* headers.
+if os.environ.get("TRUST_PROXY_HEADERS", "").lower() in ("1", "true", "yes"):
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    logger.info("ProxyFix enabled -- trusting one layer of X-Forwarded-* headers")
+
+    # Same gate: only meaningful when TLS actually terminates in front of us.
+    # SameSite must stay "Lax", NOT "Strict" -- OAuth returns via a top-level
+    # cross-site navigation from accounts.google.com, and Strict withholds the
+    # session cookie on exactly that hop, which surfaces as authlib's
+    # MismatchingStateError (the state is in the session it can't read).
+    app.config.update(
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+    )
 
 # --- Database + auth setup -------------------------------------------------
 # SECRET_KEY signs the session cookie -- required for flask_login to work.
@@ -243,7 +281,7 @@ def oauth_callback(provider):
     try:
         provider_user_id, email, _display_name = _oauth_userinfo(provider, token)
     except ValueError as e:
-        return render_template_string(AUTH_UI, mode="login", error=str(e, **_oauth_flags()))
+        return render_template_string(AUTH_UI, mode="login", error=str(e), **_oauth_flags())
 
     email = email.strip().lower()
 
@@ -413,7 +451,7 @@ def disconnect_slack():
 def account_page():
     gmail_connection = GmailConnection.query.filter_by(user_id=current_user.id).first()
     slack_connection = SlackConnection.query.filter_by(user_id=current_user.id).first()
-    return render_template_string(ACCOUNT_UI, connection=gmail_connection, slack_connection=slack_connection, **_oauth_flags())
+    return render_template_string(ACCOUNT_UI, connection=gmail_connection, slack_connection=slack_connection, sidebar=_sidebar_html("account"), **_oauth_flags())
 
 
 def require_role(role: str):
@@ -603,7 +641,7 @@ def _maybe_email_report(scan_id: str, report_path: str | None) -> None:
             return
 
         try:
-            send_report_email(connection, subject=f"vuln-agent report: {repo_name}", report_html=report_html)
+            send_report_email(connection, subject=f"Anchor report: {repo_name}", report_html=report_html)
             REPORT_EMAILS_TOTAL.labels(outcome="sent").inc()
         except EmailSendError as e:
             logger.warning(f"[email] failed to send report for scan {scan_id}: {e}")
@@ -1055,13 +1093,71 @@ def health():
 
 
 @app.route("/")
-@login_required
 def index():
+    # Public editorial landing for logged-out visitors; authenticated users
+    # go straight to their overview dashboard.
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+    return render_template_string(LANDING_UI)
+
+
+@app.route("/scan-console")
+@login_required
+def scan_console():
     org_options = "".join(
         f'<option value="{m.organization_id}">{m.organization.name}</option>'
         for m in current_user.memberships
     )
     return render_template_string(HTML_UI, org_options=org_options)
+
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    repos = get_user_accessible_repos(current_user)
+
+    open_findings = 0
+    done_count = 0
+    latest_scan_dt = None
+    rows = ""
+    for r in repos:
+        last_scan = r.scans[0] if r.scans else None
+        if last_scan:
+            when = f"{last_scan.created_at:%Y-%m-%d %H:%M}"
+            if latest_scan_dt is None or last_scan.created_at > latest_scan_dt:
+                latest_scan_dt = last_scan.created_at
+            if last_scan.status == "done":
+                done_count += 1
+                findings = (last_scan.code_findings_count or 0) + (last_scan.dep_findings_count or 0)
+                open_findings += findings
+                if findings:
+                    sev_cls, sev_txt = "high", f"{findings} finding" + ("s" if findings != 1 else "")
+                else:
+                    sev_cls, sev_txt = "clear", "Clear"
+            else:
+                sev_cls, sev_txt = "", last_scan.status
+        else:
+            when, sev_cls, sev_txt = "never", "", "—"
+
+        scope = r.organization.name if r.organization_id else "Personal"
+        rows += f"""<div class="repo-row">
+          <div><div class="name">{r.name}</div><div class="sub">{r.target} · {scope}</div></div>
+          <div class="sub">{when}</div>
+          <div class="sev {sev_cls}">{sev_txt}</div>
+          <a class="mono-link" href="/repos">Review →</a>
+        </div>"""
+
+    last_scan_display = f"{latest_scan_dt:%b %d}" if latest_scan_dt else "—"
+    return render_template_string(
+        DASHBOARD_UI,
+        user_email=current_user.email,
+        sidebar=_sidebar_html("dashboard"),
+        repo_count=len(repos),
+        open_findings=open_findings,
+        done_count=done_count,
+        last_scan=last_scan_display,
+        rows=rows,
+    )
 
 
 @app.route("/signup", methods=["GET", "POST"])
@@ -1340,9 +1436,9 @@ def repos_page():
         </form>"""
 
         scope_display = (
-            f'<span style="color:#8890a0;">{r.organization.name}</span>'
+            f'<span style="color:var(--muted-soft);">{r.organization.name}</span>'
             if r.organization_id else
-            '<span style="color:#4a5268;">Personal</span>'
+            '<span style="color:var(--muted);">Personal</span>'
         )
 
         can_manage_access = (
@@ -1361,18 +1457,20 @@ def repos_page():
           <td>{findings_display}</td>
           <td>{schedule_form}</td>
           <td>
-            <form method="POST" action="/repos/{r.id}/scan" style="display:inline;">
-              <button type="submit" class="btn-small">Re-scan</button>
-            </form>
-            {access_link}
-            <form method="POST" action="/repos/{r.id}/delete" style="display:inline;"
-                  onsubmit="return confirm('Delete {r.name} and all its scan history?');">
-              <button type="submit" class="btn-small btn-danger">Delete</button>
-            </form>
+            <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+              <form method="POST" action="/repos/{r.id}/scan" style="display:inline;">
+                <button type="submit" class="btn-small">Re-scan</button>
+              </form>
+              {access_link}
+              <form method="POST" action="/repos/{r.id}/delete" style="display:inline;"
+                    onsubmit="return confirm('Delete {r.name} and all its scan history?');">
+                <button type="submit" class="btn-small btn-danger">Delete</button>
+              </form>
+            </div>
           </td>
         </tr>"""
 
-    return render_template_string(REPOS_UI, rows=rows)
+    return render_template_string(REPOS_UI, rows=rows, sidebar=_sidebar_html("repos"))
 
 
 @app.route("/repos/<int:repo_id>/access")
@@ -1408,7 +1506,8 @@ def repo_access_page(repo_id):
     member_options = "".join(f'<option value="{m.user.email}">{m.user.email}</option>' for m in ungranted)
 
     return render_template_string(
-        REPO_ACCESS_UI, repo=repo, org=org, grant_rows=grant_rows, member_options=member_options
+        REPO_ACCESS_UI, repo=repo, org=org, grant_rows=grant_rows, member_options=member_options,
+        sidebar=_sidebar_html("repos"),
     )
 
 
@@ -1420,7 +1519,7 @@ def rescan_repo(repo_id):
         return "Repo not found", 404
 
     scan_id = _launch_scan(repo)
-    return redirect(url_for("index") + f"?scan_id={scan_id}")
+    return redirect(url_for("scan_console") + f"?scan_id={scan_id}")
 
 
 @app.route("/repos/<int:repo_id>/delete", methods=["POST"])
@@ -1673,7 +1772,7 @@ def history():
             f"<td>{report_link}</td><td>{sbom_link}</td><td>{pr_link}</td></tr>"
         )
 
-    return render_template_string(HISTORY_UI, rows=rows)
+    return render_template_string(HISTORY_UI, rows=rows, sidebar=_sidebar_html("history"))
 
 
 @app.route("/admin/scans")
@@ -1718,15 +1817,36 @@ def debug_sentry():
 
 @app.route("/metrics")
 def prometheus_metrics():
-    """Scrape target for a real Prometheus server (see docker-compose.yml).
-    Deliberately NOT behind @login_required -- Prometheus's scraper has
-    no session/cookie to authenticate with, and this endpoint exposes
-    only aggregate counters (no per-user or per-repo data), matching
-    the usual convention for /metrics endpoints. If this needs to be
-    locked down in a real deployment, restrict at the network/reverse-
-    proxy level instead (e.g. only allow the Prometheus container's IP)
-    rather than adding app-level auth that Prometheus can't satisfy.
+    """Scrape target for Prometheus / Grafana Alloy.
+
+    Not behind @login_required -- a scraper has no session cookie to
+    authenticate with. Instead it authenticates with a bearer token
+    (METRICS_TOKEN), which both Prometheus (`authorization.credentials`)
+    and Alloy (`bearer_token`) support natively.
+
+    Two reasons this is gated rather than left open, even though the
+    payload is only aggregate counters:
+
+      1. DBBackedCollector re-queries the Postgres `scans` table on
+         EVERY scrape, so an open endpoint is an unauthenticated way to
+         generate real database load, not just an info leak.
+      2. Scan/fix/email/Slack counters leak deployment activity volume.
+
+    Failure returns 404, not 401: a 401 confirms the endpoint exists and
+    invites brute-forcing, whereas 404 is indistinguishable from the
+    route not being deployed at all.
     """
+    if METRICS_TOKEN:
+        header = request.headers.get("Authorization", "")
+        scheme, _, supplied = header.partition(" ")
+        # compare_digest on bytes -- a non-ASCII token would raise on
+        # str inputs, and encoding both sides keeps the comparison
+        # constant-time. The scheme check is deliberately case-
+        # insensitive; the token comparison is not.
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            supplied.encode("utf-8"), METRICS_TOKEN.encode("utf-8")
+        ):
+            abort(404)
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 
@@ -1815,7 +1935,7 @@ def admin_metrics():
     if request.args.get("format") == "json":
         return jsonify(payload)
 
-    return render_template_string(METRICS_UI, m=payload)
+    return render_template_string(METRICS_UI, m=payload, sidebar=_sidebar_html("metrics"))
 
 
 @app.route("/status/<scan_id>")
@@ -2133,7 +2253,7 @@ def orgs_page():
           <td><a href="/orgs/{org.id}">manage</a></td>
         </tr>"""
 
-    return render_template_string(ORGS_UI, rows=rows)
+    return render_template_string(ORGS_UI, rows=rows, sidebar=_sidebar_html("orgs"))
 
 
 @app.route("/orgs/<int:org_id>")
@@ -2220,6 +2340,7 @@ def org_detail_page(org_id):
     return render_template_string(
         ORG_DETAIL_UI, org=org, my_role=my_role, member_rows=member_rows,
         invite_form=invite_form, invite_rows=invite_rows, settings_box=settings_box,
+        sidebar=_sidebar_html("orgs"),
     )
 
 
@@ -2227,73 +2348,408 @@ def org_detail_page(org_id):
 # Auth pages (login / signup) -- minimal, matches the dark theme used by
 # the main scan UI so it doesn't feel bolted-on.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Bugatti design system — shared CSS (austere luxury: black canvas, white
+# letterspaced display, serif body, monospace labels, weight 400, transparent
+# pill buttons). Concatenated into templates (NOT an f-string) so Jinja braces
+# in the surrounding markup stay intact.
+# ---------------------------------------------------------------------------
+BUGATTI_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+:root{
+  --primary:#fff;--ink:#fff;--body:#ccc;--body-strong:#e6e6e6;--muted:#999;--muted-soft:#666;
+  --hairline:#262626;--hairline-strong:#3a3a3a;--canvas:#000;--surface-soft:#0d0d0d;
+  --surface-card:#141414;--surface-elevated:#1f1f1f;--on-primary:#000;--on-dark:#fff;
+  --link:#c3d9f3;--warning:#d4a017;--success:#5fa657;
+  --font-display:'Saira Condensed',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --font-text:'Cormorant Garamond',Garamond,'Times New Roman',serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Mono',monospace;
+  --xxs:4px;--xs:8px;--sm:12px;--md:16px;--lg:24px;--xl:40px;--xxl:64px;--section:120px;
+  --r-none:0px;--r-pill:9999px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{background:var(--canvas);color:var(--on-dark);font-family:var(--font-text);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+.display-xl{font-family:var(--font-display);font-weight:400;font-size:64px;line-height:1.1;letter-spacing:4px;text-transform:uppercase;}
+.display-lg{font-family:var(--font-display);font-weight:400;font-size:48px;line-height:1.15;letter-spacing:3px;text-transform:uppercase;}
+.display-md{font-family:var(--font-display);font-weight:400;font-size:32px;line-height:1.2;letter-spacing:2px;text-transform:uppercase;}
+.display-sm{font-family:var(--font-display);font-weight:400;font-size:24px;line-height:1.3;letter-spacing:1.5px;text-transform:uppercase;}
+.title-md{font-family:var(--font-display);font-weight:400;font-size:20px;line-height:1.3;letter-spacing:1px;text-transform:uppercase;}
+.title-sm{font-family:var(--font-display);font-weight:400;font-size:16px;line-height:1.3;letter-spacing:1.5px;text-transform:uppercase;}
+.caption{font-family:var(--font-mono);font-weight:400;font-size:11px;line-height:1.4;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+.body-md{font-family:var(--font-text);font-weight:400;font-size:18px;line-height:1.5;color:var(--body);}
+.body-sm{font-family:var(--font-text);font-weight:400;font-size:15px;line-height:1.5;color:var(--body);}
+.nav-link{font-family:var(--font-mono);font-weight:400;font-size:12px;line-height:1.4;letter-spacing:2px;text-transform:uppercase;}
+.wordmark{font-family:var(--font-display);font-weight:400;font-size:14px;letter-spacing:6px;text-transform:uppercase;color:var(--on-dark);text-decoration:none;}
+.top-nav{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 var(--xl);background:transparent;position:relative;}
+.top-nav .center{position:absolute;left:50%;transform:translateX(-50%);}
+.top-nav a{color:var(--on-dark);text-decoration:none;}
+.top-nav .nav-group{display:flex;gap:var(--lg);align-items:center;}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:14px 32px;
+  background:transparent;color:var(--on-dark);border:1px solid var(--on-dark);border-radius:var(--r-pill);
+  font-family:var(--font-mono);font-size:14px;letter-spacing:2.5px;text-transform:uppercase;
+  text-decoration:none;cursor:pointer;transition:background .25s ease,color .25s ease;}
+.btn:hover{background:var(--on-dark);color:var(--on-primary);}
+.btn-full{width:100%;}
+.text-link{color:var(--link);font-family:var(--font-text);text-decoration:underline;text-underline-offset:3px;}
+.mono-link{color:var(--muted);font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;}
+.mono-link:hover{color:var(--on-dark);}
+.field{display:flex;flex-direction:column;gap:var(--xs);}
+.field label{font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+.input{height:44px;padding:12px 0;background:transparent;color:var(--on-dark);border:none;
+  border-bottom:1px solid var(--hairline-strong);font-family:var(--font-text);font-size:18px;outline:none;
+  transition:border-color .2s ease;width:100%;}
+.input::placeholder{color:var(--muted);}
+.input:focus{border-bottom-color:var(--on-dark);}
+.card{background:var(--surface-card);border-radius:var(--r-none);padding:var(--lg);}
+.footer{background:var(--canvas);color:var(--muted);padding:var(--xxl) var(--xl);border-top:1px solid var(--hairline);}
+.container{max-width:1280px;margin:0 auto;padding:0 var(--xl);}
+.stack-lg>*+*{margin-top:var(--lg);}
+.center-text{text-align:center;}
+.muted{color:var(--muted);}
+table.bt{width:100%;border-collapse:collapse;margin-top:var(--lg);font-family:var(--font-mono);font-size:12px;table-layout:fixed;}
+.bt th,.bt td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--hairline);vertical-align:middle;
+  overflow:hidden;text-overflow:ellipsis;}
+.bt th{color:var(--muted);font-weight:400;letter-spacing:1.5px;text-transform:uppercase;font-size:11px;white-space:nowrap;}
+.bt a{color:var(--link);}
+.bt td.target{color:var(--muted-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.table-scroll{width:100%;overflow-x:auto;}
+.btn-small{background:var(--surface-soft);border:1px solid var(--hairline-strong);color:var(--body);
+  padding:6px 10px;border-radius:var(--r-pill);font-size:10px;letter-spacing:.5px;text-transform:uppercase;
+  cursor:pointer;font-family:var(--font-mono);text-decoration:none;display:inline-block;white-space:nowrap;}
+.btn-small:hover{border-color:var(--on-dark);color:var(--on-dark);}
+.btn-danger:hover{border-color:#8a3030;color:#c96;}
+select,input[type=text],input[type=url],input[type=email],input[type=password]{
+  background:var(--surface-soft);border:1px solid var(--hairline-strong);border-radius:4px;
+  color:var(--on-dark);font-family:var(--font-mono);font-size:12px;padding:8px 10px;}
+.empty{color:var(--muted-soft);font-family:var(--font-text);font-size:16px;margin-top:var(--lg);}
+.page-top{display:flex;justify-content:space-between;align-items:center;gap:var(--lg);flex-wrap:wrap;}
+.link-row a{color:var(--muted);text-decoration:none;font-family:var(--font-mono);font-size:11px;
+  letter-spacing:1.5px;text-transform:uppercase;margin-left:var(--lg);}
+.link-row a:first-child{margin-left:0;}
+.link-row a:hover{color:var(--on-dark);}
+.msg{font-family:var(--font-mono);font-size:12px;margin-top:10px;}
+.msg.error{color:#c96;}
+.msg.ok{color:var(--success);}
+.btn-sm{height:36px;padding:0 20px;font-size:12px;letter-spacing:2px;}
+.role-tag{display:inline-block;margin-top:var(--xs);font-family:var(--font-mono);font-size:11px;
+  letter-spacing:1px;text-transform:uppercase;color:var(--muted);border:1px solid var(--hairline);
+  padding:3px 10px;}
+.invite-box{margin-top:var(--xxl);padding:var(--lg);background:var(--surface-card);
+  border:1px solid var(--hairline);max-width:480px;}
+.invite-row{display:flex;gap:var(--xs);}
+.invite-row select,.invite-row input{flex:1;}
+.invite-msg{font-family:var(--font-mono);font-size:12px;margin-top:10px;}
+.invite-msg.error{color:#c96;}
+.invite-msg.ok{color:var(--success);}
+.shell{display:grid;grid-template-columns:240px 1fr;min-height:100vh;}
+.sidebar{border-right:1px solid var(--hairline);padding:var(--lg) 0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;}
+.sidebar .brand{padding:var(--md) var(--lg) var(--xl);}
+.side-nav{display:flex;flex-direction:column;}
+.side-nav a{padding:14px var(--lg);font-family:var(--font-mono);font-size:12px;letter-spacing:2px;
+  text-transform:uppercase;color:var(--muted);text-decoration:none;border-left:2px solid transparent;}
+.side-nav a.active{color:var(--on-dark);border-left-color:var(--on-dark);}
+.side-nav a:hover{color:var(--on-dark);}
+.side-foot{margin-top:auto;padding:var(--lg);border-top:1px solid var(--hairline);}
+.main{padding:var(--xl);}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:var(--xl);flex-wrap:wrap;gap:var(--md);}
+@media(max-width:900px){.shell{grid-template-columns:1fr;}
+  .sidebar{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;}
+  .side-foot{display:none;}}
+"""
+
+
+def _sidebar_html(active):
+    """Shared left-nav sidebar markup for every authenticated app page."""
+    items = [
+        ("dashboard", "/dashboard", "Overview"),
+        ("repos", "/repos", "Repositories"),
+        ("orgs", "/orgs", "Organizations"),
+        ("history", "/history", "History"),
+        ("scan", "/scan-console", "New scan"),
+        ("account", "/account", "Account"),
+    ]
+    links = "".join(
+        f'<a href="{href}"{" class=\"active\"" if key == active else ""}>{label}</a>'
+        for key, href, label in items
+    )
+    try:
+        email = current_user.email
+    except Exception:
+        email = ""
+    return f"""<aside class="sidebar">
+      <a class="wordmark brand" href="/">Anchor</a>
+      <nav class="side-nav">
+        {links}
+        <a href="/logout">Log out</a>
+      </nav>
+      <div class="side-foot">
+        <p class="caption">Signed in as</p>
+        <p class="body-sm" style="color:var(--on-dark);">{email}</p>
+      </div>
+    </aside>"""
+
+
+# ---------------------------------------------------------------------------
+# Public marketing landing (editorial grid) — served at "/" for logged-out
+# visitors. Logged-in users are redirected to /dashboard by the route.
+# ---------------------------------------------------------------------------
+LANDING_UI = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anchor — The fix that holds</title>
+  <style>""" + BUGATTI_CSS + """
+  .hero-band{position:relative;min-height:72vh;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;background:radial-gradient(140% 100% at 50% 0%,#1c1c1c 0%,#000 55%);
+    border-bottom:1px solid var(--hairline);padding:0 var(--xl);}
+  .hero-band h1{max-width:900px;margin:var(--md) 0 var(--lg);}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--xl);padding:var(--section) var(--xl) var(--xl);}
+  .model-card .thumb{aspect-ratio:16/9;margin-bottom:var(--md);background:linear-gradient(135deg,#161616,#000);
+    border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;
+    font-family:var(--font-mono);font-size:11px;letter-spacing:2px;color:var(--muted-soft);text-transform:uppercase;}
+  .model-card .display-sm{margin-bottom:var(--xs);}
+  .trust-section{padding:0 var(--xl) var(--section);border-top:1px solid var(--hairline);}
+  .trust-inner{max-width:1120px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:var(--xxl);
+    align-items:center;padding-top:var(--section);}
+  .trust-inner .caption{margin-bottom:var(--sm);}
+  .trust-inner h2{margin-bottom:var(--md);}
+  .trust-inner p.body-md{margin-bottom:var(--sm);}
+  .compare{border:1px solid var(--hairline);}
+  .compare-head{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--hairline-strong);}
+  .compare-head div{padding:var(--sm) var(--md);font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
+    text-transform:uppercase;color:var(--muted-soft);}
+  .compare-head div:last-child{color:var(--on-dark);}
+  .compare-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--hairline);}
+  .compare-row:last-child{border-bottom:none;}
+  .compare-cell{padding:var(--md);font-family:var(--font-text);font-size:15px;}
+  .compare-cell.bad{color:var(--muted-soft);}
+  .compare-cell.good{color:var(--on-dark);}
+  .integrations-band{padding:0 var(--xl) var(--section);text-align:center;border-top:1px solid var(--hairline);}
+  .integrations-band .caption{margin-top:var(--section);margin-bottom:var(--sm);}
+  .integrations-band h2{margin-bottom:var(--md);}
+  .chip-row{display:flex;flex-wrap:wrap;justify-content:center;gap:var(--sm);margin-top:var(--xl);}
+  .chip{border:1px solid var(--hairline-strong);padding:10px 20px;font-family:var(--font-mono);
+    font-size:12px;letter-spacing:1px;color:var(--body);}
+  .cta-band{position:relative;padding:var(--section) var(--xl);text-align:center;
+    background:radial-gradient(100% 120% at 50% 100%,#1a1a1a,#000 60%);border-top:1px solid var(--hairline);}
+  .cta-band h2{margin-bottom:var(--xl);max-width:640px;margin-left:auto;margin-right:auto;}
+  @media(max-width:768px){.display-xl{font-size:34px;}.grid-3{grid-template-columns:1fr;padding:var(--xxl) var(--xl);}
+    .trust-inner{grid-template-columns:1fr;padding-top:var(--xxl);}}
+  </style>
+</head>
+<body>
+  <nav class="top-nav">
+    <div class="nav-group"><span class="nav-link muted">bandit · pip-audit · llama-3 · critic</span></div>
+    <a class="wordmark center" href="/">Anchor</a>
+    <div class="nav-group"><a class="nav-link" href="/login">Sign in</a><a class="nav-link" href="/signup" style="margin-left:var(--lg);">Sign up</a></div>
+  </nav>
+
+  <header class="hero-band">
+    <p class="caption">The fix that holds</p>
+    <h1 class="display-xl">Security scanning that<br>doesn't stop at &ldquo;here&rsquo;s what&rsquo;s wrong.&rdquo;</h1>
+    <p class="body-md" style="max-width:520px;">Anchor scans your repo, verifies every fix through an independent AI critic, and opens a pull request — only for fixes that actually pass. No guessing, no unverified AI patches merged blind.</p>
+    <div style="margin-top:var(--xl);display:flex;gap:var(--md);">
+      <a class="btn" href="/signup">Sign up free</a>
+      <a class="btn" href="/login" style="border-color:var(--hairline-strong);color:var(--muted);">Sign in</a>
+    </div>
+  </header>
+
+  <section class="grid-3">
+    <article class="model-card">
+      <div class="thumb">01 · Scan</div>
+      <p class="caption">Bandit · Semgrep · pip-audit</p>
+      <h3 class="display-sm">Find what's actually wrong</h3>
+      <p class="body-sm">Static analysis and dependency scanning across Python, Go, and Java, enriched with real CVSS data from OSV.dev.</p>
+    </article>
+    <article class="model-card">
+      <div class="thumb">02 · Fix &amp; verify</div>
+      <p class="caption">Two models, one standard</p>
+      <h3 class="display-sm">Independently verified</h3>
+      <p class="body-sm">One model proposes a fix. A second, independent model critiques it. It only survives syntax validation, a fresh re-scan, and your test suite.</p>
+    </article>
+    <article class="model-card">
+      <div class="thumb">03 · Ship</div>
+      <p class="caption">You always have the last word</p>
+      <h3 class="display-sm">A real pull request</h3>
+      <p class="body-sm">Confirmed fixes become a GitHub pull request — after your review, never merged automatically.</p>
+    </article>
+  </section>
+
+  <section class="trust-section">
+    <div class="trust-inner">
+      <div>
+        <p class="caption">Most tools stop at a suggestion</p>
+        <h2 class="display-lg">Anchor doesn't trust its own output either.</h2>
+        <p class="body-md">Every proposed fix goes through multiple independent checks before it's ever shown to you as confirmed.</p>
+        <p class="body-md">Fixes that don't pass are shown separately, clearly labeled — never silently merged.</p>
+      </div>
+      <div class="compare">
+        <div class="compare-head"><div>Typical AI tools</div><div>Anchor</div></div>
+        <div class="compare-row">
+          <div class="compare-cell bad">Shows a raw suggestion</div>
+          <div class="compare-cell good">Runs it through a second model</div>
+        </div>
+        <div class="compare-row">
+          <div class="compare-cell bad">No re-scan after the fix</div>
+          <div class="compare-cell good">Re-scans before confirming</div>
+        </div>
+        <div class="compare-row">
+          <div class="compare-cell bad">Merges without you looking</div>
+          <div class="compare-cell good">Opens a PR, waits for you</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="integrations-band">
+    <p class="caption">Integrations</p>
+    <h2 class="display-lg">Connects to what your team already uses</h2>
+    <p class="body-md" style="max-width:480px;margin:0 auto;">Google and GitHub sign-in, Gmail auto-reports, Slack notifications, and SBOM export for compliance.</p>
+    <div class="chip-row">
+      <span class="chip">Google sign-in</span>
+      <span class="chip">GitHub sign-in &amp; PRs</span>
+      <span class="chip">Gmail auto-reports</span>
+      <span class="chip">Slack notifications</span>
+      <span class="chip">SBOM export</span>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <p class="caption">Ready when you are</p>
+    <h2 class="display-lg">Find out what's actually vulnerable — and what's actually fixed.</h2>
+    <a class="btn" href="/signup">Get started free</a>
+  </section>
+
+  <footer class="footer center-text">
+    <span class="wordmark">Anchor</span>
+    <p class="body-sm muted" style="margin-top:var(--md);">The fix that holds · © 2026 Anchor</p>
+  </footer>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# Authenticated overview dashboard (app-a). Stats + accessible-repo rows.
+# Vars: user_email, repo_count, open_findings, done_count, last_scan, rows.
+# ---------------------------------------------------------------------------
+DASHBOARD_UI = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anchor — Overview</title>
+  <style>""" + BUGATTI_CSS + """
+  .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--hairline);margin-bottom:var(--xxl);}
+  .stat{padding:var(--lg);border-right:1px solid var(--hairline);}
+  .stat:last-child{border-right:none;}
+  .stat .display-md{margin:var(--xs) 0;}
+  .stat .warn{color:var(--warning);}.stat .ok{color:var(--success);}
+  .list-head,.repo-row{display:grid;grid-template-columns:2fr 1fr 1fr 120px;gap:var(--lg);align-items:center;
+    padding:var(--lg) 0;border-bottom:1px solid var(--hairline);}
+  .list-head{border-bottom-color:var(--hairline-strong);}
+  .list-head span{font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--muted-soft);}
+  .repo-row .name{font-family:var(--font-display);font-size:18px;letter-spacing:1px;text-transform:uppercase;}
+  .repo-row .sub{font-family:var(--font-mono);font-size:11px;letter-spacing:1px;color:var(--muted);}
+  .sev{font-family:var(--font-mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;}
+  .sev.high{color:var(--warning);}.sev.clear{color:var(--success);}
+  .empty{padding:var(--xxl) 0;text-align:center;}
+  @media(max-width:900px){.stat-grid{grid-template-columns:1fr 1fr;}
+    .list-head{display:none;}.repo-row{grid-template-columns:1fr 1fr;}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    {{ sidebar | safe }}
+
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <p class="caption">Workspace</p>
+          <h1 class="display-lg">Overview</h1>
+        </div>
+        <a class="btn" href="/scan-console">New scan</a>
+      </div>
+
+      <section class="stat-grid">
+        <div class="stat"><p class="caption">Repositories</p><div class="display-md">{{ repo_count }}</div></div>
+        <div class="stat"><p class="caption">Open findings</p><div class="display-md warn">{{ open_findings }}</div></div>
+        <div class="stat"><p class="caption">Scans complete</p><div class="display-md ok">{{ done_count }}</div></div>
+        <div class="stat"><p class="caption">Last scan</p><div class="display-md">{{ last_scan }}</div></div>
+      </section>
+
+      <div class="list-head"><span>Repository</span><span>Last scan</span><span>Severity</span><span></span></div>
+      {% if rows %}{{ rows | safe }}{% else %}
+      <div class="empty">
+        <p class="caption">No repositories yet</p>
+        <p class="body-md" style="margin:var(--md) 0 var(--lg);">Run your first scan to populate the overview.</p>
+        <a class="btn" href="/scan-console">New scan</a>
+      </div>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>"""
+
+
 AUTH_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ 'Sign up' if mode == 'signup' else 'Log in' }} — Vulnerability Scanner</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    }
-    .card {
-      width: 320px; padding: 2rem; background: #0e1219; border: 1px solid #1c2130; border-radius: 8px;
-    }
-    h1 { font-size: 1.1rem; font-weight: 500; margin-bottom: 1.5rem; }
-    label { display: block; font-size: 0.8rem; color: #8890a0; margin-bottom: 0.3rem; margin-top: 1rem; }
-    input {
-      width: 100%; padding: 0.6rem; background: #080b10; border: 1px solid #1c2130; border-radius: 4px;
-      color: #c8cdd8; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem;
-    }
-    button {
-      width: 100%; margin-top: 1.5rem; padding: 0.7rem; background: #3b82f6; border: none; border-radius: 4px;
-      color: white; font-weight: 500; cursor: pointer; font-size: 0.9rem;
-    }
-    button:hover { background: #2563eb; }
-    .error { color: #ef4444; font-size: 0.8rem; margin-top: 1rem; }
-    .switch { margin-top: 1.2rem; font-size: 0.8rem; color: #8890a0; text-align: center; }
-    .switch a { color: #3b82f6; text-decoration: none; }
-    .oauth-row { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1.2rem; }
-    .oauth-btn {
-      display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-      width: 100%; padding: 0.6rem; background: #161b26; border: 1px solid #1c2130; border-radius: 4px;
-      color: #c8cdd8; font-size: 0.85rem; text-decoration: none; font-family: 'Inter', sans-serif;
-    }
-    .oauth-btn:hover { background: #1c2130; }
-    .divider { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.4rem; color: #8890a0; font-size: 0.75rem; }
-    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #1c2130; }
+  <title>{{ 'Sign up' if mode == 'signup' else 'Sign in' }} — Anchor</title>
+  <style>""" + BUGATTI_CSS + """
+    .auth-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      padding:var(--xl);background:radial-gradient(120% 90% at 50% 0%,#141414 0%,#000 55%);}
+    .auth-card{width:100%;max-width:420px;}
+    .toggle{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--hairline-strong);
+      border-radius:var(--r-pill);overflow:hidden;margin-bottom:var(--xxl);}
+    .toggle a{padding:12px 0;text-align:center;font-family:var(--font-mono);font-size:12px;letter-spacing:2px;
+      text-transform:uppercase;color:var(--muted);text-decoration:none;}
+    .toggle a.active{background:var(--on-dark);color:var(--on-primary);}
+    .auth-card h1{text-align:center;margin-bottom:var(--xl);}
+    .oauth-row{display:flex;gap:var(--sm);margin-bottom:var(--lg);}
+    .oauth-row a{flex:1;padding:14px 0;border-color:var(--hairline-strong);color:var(--body);font-size:12px;letter-spacing:2px;}
+    .divider{display:flex;align-items:center;gap:var(--md);margin-bottom:var(--lg);}
+    .divider .line{flex:1;border-top:1px solid var(--hairline);}
+    .error{font-family:var(--font-mono);font-size:11px;letter-spacing:1px;color:var(--warning);text-align:center;}
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>{{ 'Create an account' if mode == 'signup' else 'Log in' }}</h1>
-    {% if google_enabled or github_enabled %}
-    <div class="oauth-row">
-      {% if google_enabled %}<a class="oauth-btn" href="/auth/google">Continue with Google</a>{% endif %}
-      {% if github_enabled %}<a class="oauth-btn" href="/auth/github">Continue with GitHub</a>{% endif %}
-    </div>
-    <div class="divider">or</div>
-    {% endif %}
-    <form method="POST">
-      <label>Email</label>
-      <input type="email" name="email" required autofocus>
-      <label>Password</label>
-      <input type="password" name="password" required>
-      {% if error %}<div class="error">{{ error }}</div>{% endif %}
-      <button type="submit">{{ 'Sign up' if mode == 'signup' else 'Log in' }}</button>
-    </form>
-    <div class="switch">
-      {% if mode == 'signup' %}
-        Already have an account? <a href="/login">Log in</a>
-      {% else %}
-        No account? <a href="/signup">Sign up</a>
+  <nav class="top-nav"><a class="wordmark center" href="/">Anchor</a></nav>
+  <main class="auth-wrap">
+    <div class="auth-card">
+      <div class="toggle">
+        <a href="/login" class="{{ 'active' if mode != 'signup' else '' }}">Sign in</a>
+        <a href="/signup" class="{{ 'active' if mode == 'signup' else '' }}">Sign up</a>
+      </div>
+
+      <h1 class="display-md">{{ 'Create account' if mode == 'signup' else 'Sign in' }}</h1>
+
+      {% if google_enabled or github_enabled %}
+      <div class="oauth-row">
+        {% if google_enabled %}<a class="btn" href="/auth/google">Google</a>{% endif %}
+        {% if github_enabled %}<a class="btn" href="/auth/github">GitHub</a>{% endif %}
+      </div>
+      <div class="divider"><span class="line"></span><span class="caption">Or</span><span class="line"></span></div>
       {% endif %}
+
+      <form method="POST" class="stack-lg">
+        <div class="field">
+          <label>Email</label>
+          <input class="input" type="email" name="email" placeholder="you@company.com" required autofocus>
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input class="input" type="password" name="password" placeholder="••••••••" required>
+        </div>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <button type="submit" class="btn btn-full">{{ 'Create account' if mode == 'signup' else 'Continue' }}</button>
+        <p class="caption center-text">Protected by hardware-key MFA</p>
+      </form>
     </div>
-  </div>
+  </main>
 </body>
 </html>"""
 
@@ -2305,84 +2761,80 @@ ACCOUNT_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Account Settings</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; margin-bottom: 1rem; }
-    a.back { color: #3b82f6; text-decoration: none; font-size: 0.85rem; }
-    .card { background: #0e131c; border: 1px solid #1c2130; border-radius: 8px; padding: 1.25rem; margin-top: 1.5rem; max-width: 480px; }
-    .row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-    .label { font-size: 0.9rem; }
-    .sub { font-size: 0.78rem; color: #8890a0; margin-top: 0.3rem; font-family: 'IBM Plex Mono', monospace; }
-    .btn { padding: 0.5rem 0.9rem; border-radius: 4px; font-size: 0.82rem; text-decoration: none; cursor: pointer; border: none; }
-    .btn-connect { background: #3b82f6; color: white; }
-    .btn-disconnect { background: transparent; color: #ef4444; border: 1px solid #3a1f24; }
-    form { display: inline; }
-    .flash { font-size: 0.8rem; color: #3fb950; margin-bottom: 1rem; font-family: 'IBM Plex Mono', monospace; }
-    .slack-form { display: block; margin-top: 0.75rem; }
-    .slack-form input {
-      width: 100%; padding: 0.5rem 0.6rem; margin-bottom: 0.5rem; border-radius: 4px;
-      background: #161b26; border: 1px solid #1c2130; color: #c8cdd8; font-size: 0.82rem;
-      font-family: 'IBM Plex Mono', monospace; box-sizing: border-box;
-    }
-    .help-link { color: #3b82f6; text-decoration: none; }
+  <style>""" + BUGATTI_CSS + """
+    .acct-card{background:var(--surface-card);border:1px solid var(--hairline);border-radius:var(--r-none);
+      padding:var(--lg);margin-top:var(--lg);max-width:560px;}
+    .acct-row{display:flex;align-items:center;justify-content:space-between;gap:var(--lg);}
+    .acct-sub{margin-top:6px;}
+    .btn-sm{height:36px;padding:0 20px;font-size:12px;letter-spacing:2px;}
+    .btn-danger{border-color:var(--hairline-strong);color:var(--body);}
+    .btn-danger:hover{background:#2a1414;border-color:#5a2020;color:#e88;}
+    form{display:inline;}
+    .flash{font-family:var(--font-mono);font-size:12px;letter-spacing:1px;color:var(--success);margin-bottom:var(--lg);}
+    .slack-form{display:block;margin-top:var(--md);}
+    .slack-form .input{margin-bottom:var(--sm);}
+    .slack-form .btn{width:100%;margin-top:var(--xs);}
   </style>
 </head>
 <body>
-  <a class="back" href="/">&larr; New scan</a>
-  <h1 style="margin-top:1rem;">Account Settings</h1>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+    <div class="display-lg">Account settings</div>
 
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
-  {% endwith %}
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+    {% endwith %}
 
-  <div class="card">
-    <div class="row">
-      <div>
-        <div class="label">Gmail auto-send</div>
+    <div class="acct-card">
+      <div class="acct-row">
+        <div>
+          <div class="title-sm">Gmail auto-send</div>
+          {% if connection %}
+            <div class="body-sm acct-sub">Connected as {{ connection.gmail_address }} — reports email automatically when generated.</div>
+          {% else %}
+            <div class="body-sm acct-sub muted">Not connected — reports won't be emailed.</div>
+          {% endif %}
+        </div>
         {% if connection %}
-          <div class="sub">Connected as {{ connection.gmail_address }} -- reports email automatically when generated.</div>
+          <form method="POST" action="/disconnect/gmail" onsubmit="return confirm('Disconnect Gmail? Reports will stop being emailed.');">
+            <button class="btn btn-sm btn-danger" type="submit">Disconnect</button>
+          </form>
+        {% elif google_enabled %}
+          <a class="btn btn-sm" href="/connect/gmail">Connect Gmail</a>
         {% else %}
-          <div class="sub">Not connected -- reports won't be emailed.</div>
+          <span class="caption">Google OAuth not configured</span>
         {% endif %}
       </div>
-      {% if connection %}
-        <form method="POST" action="/disconnect/gmail" onsubmit="return confirm('Disconnect Gmail? Reports will stop being emailed.');">
-          <button class="btn btn-disconnect" type="submit">Disconnect</button>
-        </form>
-      {% elif google_enabled %}
-        <a class="btn btn-connect" href="/connect/gmail">Connect Gmail</a>
-      {% else %}
-        <span class="sub">Google OAuth is not configured on this server.</span>
-      {% endif %}
     </div>
-  </div>
 
-  <div class="card">
-    <div class="row">
-      <div>
-        <div class="label">Slack notifications</div>
+    <div class="acct-card">
+      <div class="acct-row">
+        <div>
+          <div class="title-sm">Slack notifications</div>
+          {% if slack_connection %}
+            <div class="body-sm acct-sub">Connected{% if slack_connection.channel_label %} ({{ slack_connection.channel_label }}){% endif %} — posts a summary when a scan fully completes (findings, fixes, PR).</div>
+          {% else %}
+            <div class="body-sm acct-sub muted">Not connected — paste an Incoming Webhook URL below. <a class="text-link" href="https://api.slack.com/messaging/webhooks" target="_blank">How to create one &rarr;</a></div>
+          {% endif %}
+        </div>
         {% if slack_connection %}
-          <div class="sub">Connected{% if slack_connection.channel_label %} ({{ slack_connection.channel_label }}){% endif %} -- posts a summary when a scan fully completes (findings, fixes, PR).</div>
-        {% else %}
-          <div class="sub">Not connected -- paste an Incoming Webhook URL below. <a class="help-link" href="https://api.slack.com/messaging/webhooks" target="_blank">How to create one &rarr;</a></div>
+          <form method="POST" action="/disconnect/slack" onsubmit="return confirm('Disconnect Slack? Notifications will stop.');">
+            <button class="btn btn-sm btn-danger" type="submit">Disconnect</button>
+          </form>
         {% endif %}
       </div>
-      {% if slack_connection %}
-        <form method="POST" action="/disconnect/slack" onsubmit="return confirm('Disconnect Slack? Notifications will stop.');">
-          <button class="btn btn-disconnect" type="submit">Disconnect</button>
+      {% if not slack_connection %}
+        <form class="slack-form" method="POST" action="/connect/slack">
+          <input class="input" type="url" name="webhook_url" placeholder="https://hooks.slack.com/services/..." required>
+          <input class="input" type="text" name="channel_label" placeholder="Label (optional, e.g. #security-alerts)">
+          <button class="btn" type="submit">Connect Slack</button>
         </form>
       {% endif %}
     </div>
-    {% if not slack_connection %}
-      <form class="slack-form" method="POST" action="/connect/slack">
-        <input type="url" name="webhook_url" placeholder="https://hooks.slack.com/services/..." required>
-        <input type="text" name="channel_label" placeholder="Label (optional, e.g. #security-alerts)">
-        <button class="btn btn-connect" type="submit" style="width:100%;">Connect Slack</button>
-      </form>
-    {% endif %}
+    </main>
   </div>
 </body>
 </html>"""
@@ -2395,27 +2847,22 @@ HISTORY_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scan History</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; margin-bottom: 1rem; }
-    a.back { color: #3b82f6; text-decoration: none; font-size: 0.85rem; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
-    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1c2130; }
-    th { color: #8890a0; font-weight: 500; }
-    a { color: #3b82f6; text-decoration: none; }
+  <style>""" + BUGATTI_CSS + """
   </style>
 </head>
 <body>
-  <a class="back" href="/">&larr; New scan</a>
-  <a class="back" href="/orgs" style="margin-left:1rem;">Organizations</a>
-  <h1>Scan History</h1>
-  <table>
-    <tr><th>Repo</th><th>When</th><th>Status</th><th>Trigger</th><th>Findings</th><th>Fixes</th><th>Withheld</th><th>Report</th><th>SBOM</th><th>PR</th></tr>
-    {{ rows | safe }}
-  </table>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+    <div class="display-lg">Scan history</div>
+    <table class="bt">
+      <tr><th>Repo</th><th>When</th><th>Status</th><th>Trigger</th><th>Findings</th><th>Fixes</th><th>Withheld</th><th>Report</th><th>SBOM</th><th>PR</th></tr>
+      {{ rows | safe }}
+    </table>
+    </main>
+  </div>
 </body>
 </html>"""
 
@@ -2424,51 +2871,55 @@ METRICS_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scan Metrics</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; margin-bottom: 1rem; }
-    a.back { color: #3b82f6; text-decoration: none; font-size: 0.85rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
-    .card { background: #0e131c; border: 1px solid #1c2130; border-radius: 8px; padding: 1rem; }
-    .card .label { color: #8890a0; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; font-family: 'IBM Plex Mono', monospace; }
-    .card .value { font-size: 1.6rem; margin-top: .35rem; font-family: 'IBM Plex Mono', monospace; }
-    .ok { color: #3fb950; }
-    .err { color: #f85149; }
-    a { color: #3b82f6; }
+  <style>""" + BUGATTI_CSS + """
+    .mgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1px;
+      background:var(--hairline);margin-top:var(--lg);border:1px solid var(--hairline);}
+    .mcell{background:var(--canvas);padding:var(--md);}
+    .mcell .caption{margin-bottom:6px;}
+    .mcell .value{font-family:var(--font-mono);font-size:26px;color:var(--on-dark);}
+    .ok{color:var(--success);}
+    .err{color:#c94f4f;}
   </style>
 </head>
 <body>
-  <a class="back" href="/">&larr; New scan</a>
-  <a class="back" href="/admin/scans" style="margin-left:1rem;">Raw scan list</a>
-  <a class="back" href="/admin/metrics?format=json" style="margin-left:1rem;">JSON</a>
-  <h1>Scan Metrics</h1>
-
-  <div class="grid">
-    <div class="card"><div class="label">Total scans</div><div class="value">{{ m.totals.all_scans }}</div></div>
-    <div class="card"><div class="label">Last 24h</div><div class="value">{{ m.totals.last_24h }}</div></div>
-    <div class="card"><div class="label">Last 7d</div><div class="value">{{ m.totals.last_7d }}</div></div>
-
-    <div class="card"><div class="label">Running</div><div class="value">{{ m.by_status.running }}</div></div>
-    <div class="card"><div class="label">Waiting approval</div><div class="value">{{ m.by_status.waiting_approval }}</div></div>
-    <div class="card"><div class="label">Done</div><div class="value ok">{{ m.by_status.done }}</div></div>
-    <div class="card"><div class="label">Error</div><div class="value err">{{ m.by_status.error }}</div></div>
-
-    <div class="card"><div class="label">Avg duration</div>
-      <div class="value">{{ m.performance.avg_duration_seconds if m.performance.avg_duration_seconds is not none else '--' }}s</div>
-    </div>
-    <div class="card"><div class="label">Error rate</div><div class="value">{{ m.performance.error_rate_pct }}%</div></div>
-
-    <div class="card"><div class="label">Confirmed fixes</div><div class="value ok">{{ m.fix_pipeline.confirmed_fixes }}</div></div>
-    <div class="card"><div class="label">Withheld fixes</div><div class="value err">{{ m.fix_pipeline.withheld_fixes }}</div></div>
-    <div class="card"><div class="label">Confirm rate</div>
-      <div class="value">{{ m.fix_pipeline.confirm_rate_pct if m.fix_pipeline.confirm_rate_pct is not none else '--' }}%</div>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+    <div class="page-head">
+      <div class="display-lg">Scan metrics</div>
+      <div class="link-row">
+        <a href="/admin/scans">Raw scan list</a>
+        <a href="/admin/metrics?format=json">JSON</a>
+      </div>
     </div>
 
-    <div class="card"><div class="label">Code findings (all-time)</div><div class="value">{{ m.findings.code_findings_total }}</div></div>
-    <div class="card"><div class="label">Dep findings (all-time)</div><div class="value">{{ m.findings.dep_findings_total }}</div></div>
+    <div class="mgrid">
+      <div class="mcell"><div class="caption">Total scans</div><div class="value">{{ m.totals.all_scans }}</div></div>
+      <div class="mcell"><div class="caption">Last 24h</div><div class="value">{{ m.totals.last_24h }}</div></div>
+      <div class="mcell"><div class="caption">Last 7d</div><div class="value">{{ m.totals.last_7d }}</div></div>
+
+      <div class="mcell"><div class="caption">Running</div><div class="value">{{ m.by_status.running }}</div></div>
+      <div class="mcell"><div class="caption">Waiting approval</div><div class="value">{{ m.by_status.waiting_approval }}</div></div>
+      <div class="mcell"><div class="caption">Done</div><div class="value ok">{{ m.by_status.done }}</div></div>
+      <div class="mcell"><div class="caption">Error</div><div class="value err">{{ m.by_status.error }}</div></div>
+
+      <div class="mcell"><div class="caption">Avg duration</div>
+        <div class="value">{{ m.performance.avg_duration_seconds if m.performance.avg_duration_seconds is not none else '--' }}s</div>
+      </div>
+      <div class="mcell"><div class="caption">Error rate</div><div class="value">{{ m.performance.error_rate_pct }}%</div></div>
+
+      <div class="mcell"><div class="caption">Confirmed fixes</div><div class="value ok">{{ m.fix_pipeline.confirmed_fixes }}</div></div>
+      <div class="mcell"><div class="caption">Withheld fixes</div><div class="value err">{{ m.fix_pipeline.withheld_fixes }}</div></div>
+      <div class="mcell"><div class="caption">Confirm rate</div>
+        <div class="value">{{ m.fix_pipeline.confirm_rate_pct if m.fix_pipeline.confirm_rate_pct is not none else '--' }}%</div>
+      </div>
+
+      <div class="mcell"><div class="caption">Code findings (all-time)</div><div class="value">{{ m.findings.code_findings_total }}</div></div>
+      <div class="mcell"><div class="caption">Dep findings (all-time)</div><div class="value">{{ m.findings.dep_findings_total }}</div></div>
+    </div>
+    </main>
   </div>
 </body>
 </html>"""
@@ -2481,50 +2932,36 @@ REPOS_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My Repos</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; }
-    a.new-scan {
-      background: #3b82f6; color: white; text-decoration: none; padding: 0.5rem 1rem;
-      border-radius: 4px; font-size: 0.85rem; font-weight: 500;
-    }
-    a.history-link { color: #8890a0; text-decoration: none; font-size: 0.85rem; margin-right: 1rem; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
-    th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #1c2130; vertical-align: middle; }
-    th { color: #8890a0; font-weight: 500; }
-    td.target { color: #6b7280; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .btn-small {
-      background: #161b25; border: 1px solid #2a3347; color: #c8cdd8; padding: 0.35rem 0.7rem;
-      border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-family: 'IBM Plex Mono', monospace;
-    }
-    .btn-small:hover { border-color: #3b82f6; }
-    .btn-danger:hover { border-color: #ef4444; color: #ef4444; }
-    .empty { color: #4a5268; font-size: 0.85rem; margin-top: 2rem; }
+  <style>""" + BUGATTI_CSS + """
   </style>
 </head>
 <body>
-  <div class="top">
-    <h1>My Repos</h1>
-    <div>
-      <a class="history-link" href="/orgs">organizations</a>
-      <a class="history-link" href="/history">history</a>
-      <a class="history-link" href="/logout">log out</a>
-      <a class="new-scan" href="/">+ New scan</a>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+    <div class="page-head">
+      <div class="display-lg">My repos</div>
+      <a class="btn" href="/scan-console">+ New scan</a>
     </div>
-  </div>
 
-  {% if rows %}
-  <table>
-    <tr><th>Repo</th><th>Target</th><th>Scope</th><th>Last scan</th><th>Status</th><th>Findings</th><th>Schedule</th><th>Actions</th></tr>
-    {{ rows | safe }}
-  </table>
-  {% else %}
-  <div class="empty">No repos yet -- run a scan to add one, or <a href="/" style="color:#3b82f6;">start here</a>.</div>
-  {% endif %}
+    {% if rows %}
+    <div class="table-scroll">
+    <table class="bt">
+      <colgroup>
+        <col style="width:13%"><col style="width:20%"><col style="width:9%"><col style="width:10%">
+        <col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:23%">
+      </colgroup>
+      <tr><th>Repo</th><th>Target</th><th>Scope</th><th>Last scan</th><th>Status</th><th>Findings</th><th>Schedule</th><th>Actions</th></tr>
+      {{ rows | safe }}
+    </table>
+    </div>
+    {% else %}
+    <div class="empty">No repos yet — run a scan to add one, or <a class="text-link" href="/scan-console">start here</a>.</div>
+    {% endif %}
+    </main>
+  </div>
 </body>
 </html>"""
 
@@ -2536,66 +2973,44 @@ ORGS_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Organizations</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; }
-    h2 { font-size: 0.95rem; font-weight: 500; margin-bottom: 0.75rem; color: #e8ecf4; }
-    a.link { color: #8890a0; text-decoration: none; font-size: 0.85rem; margin-right: 1rem; }
-    a { color: #3b82f6; text-decoration: none; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
-    th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #1c2130; vertical-align: middle; }
-    th { color: #8890a0; font-weight: 500; }
-    .empty { color: #4a5268; font-size: 0.85rem; margin-top: 1rem; }
-    .create-box {
-      margin-top: 2.5rem; padding: 1.25rem; background: #0e1219; border: 1px solid #1c2130;
-      border-radius: 8px; max-width: 420px;
-    }
-    .create-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
-    input {
-      flex: 1; padding: 0.6rem; background: #080b10; border: 1px solid #1c2130; border-radius: 4px;
-      color: #c8cdd8; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem;
-    }
-    button {
-      padding: 0.6rem 1rem; background: #3b82f6; border: none; border-radius: 4px;
-      color: white; font-weight: 500; cursor: pointer; font-size: 0.85rem; font-family: 'Inter', sans-serif;
-    }
-    button:hover { background: #2563eb; }
-    .msg { font-size: 0.8rem; margin-top: 0.6rem; }
-    .msg.error { color: #ef4444; }
-    .msg.ok { color: #22c55e; }
+  <style>""" + BUGATTI_CSS + """
+    .create-box{margin-top:var(--xxl);padding:var(--lg);background:var(--surface-card);
+      border:1px solid var(--hairline);max-width:420px;}
+    .create-row{display:flex;gap:var(--xs);margin-top:var(--xs);}
+    .create-row input{flex:1;}
   </style>
 </head>
 <body>
-  <div class="top">
-    <h1>Organizations</h1>
-    <div>
-      <a class="link" href="/repos">my repos</a>
-      <a class="link" href="/history">history</a>
-      <a class="link" href="/logout">log out</a>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+    <div class="page-head">
+      <div class="display-lg">Organizations</div>
+      <div class="link-row">
+        <a href="/repos">My repos</a>
+        <a href="/history">History</a>
+      </div>
     </div>
-  </div>
 
-  {% if rows %}
-  <table>
-    <tr><th>Name</th><th>Your role</th><th>Members</th><th></th></tr>
-    {{ rows | safe }}
-  </table>
-  {% else %}
-  <div class="empty">You aren't a member of any organization yet -- create one below to start sharing repos with a team.</div>
-  {% endif %}
+    {% if rows %}
+    <table class="bt">
+      <tr><th>Name</th><th>Your role</th><th>Members</th><th></th></tr>
+      {{ rows | safe }}
+    </table>
+    {% else %}
+    <div class="empty">You aren't a member of any organization yet — create one below to start sharing repos with a team.</div>
+    {% endif %}
 
-  <div class="create-box">
-    <h2>Create an organization</h2>
-    <div class="create-row">
-      <input type="text" id="org-name" placeholder="Acme Corp">
-      <button onclick="createOrg()">Create</button>
+    <div class="create-box">
+      <div class="title-sm" style="margin-bottom:var(--sm);">Create an organization</div>
+      <div class="create-row">
+        <input type="text" id="org-name" placeholder="Acme Corp">
+        <button class="btn btn-sm" onclick="createOrg()">Create</button>
+      </div>
+      <div class="msg" id="create-msg"></div>
     </div>
-    <div class="msg" id="create-msg"></div>
-  </div>
 
 <script>
   async function createOrg() {
@@ -2620,6 +3035,8 @@ ORGS_UI = """<!DOCTYPE html>
     }
   }
 </script>
+    </main>
+  </div>
 </body>
 </html>"""
 
@@ -2631,65 +3048,20 @@ ORG_DETAIL_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ org.name }} — Organization</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; }
-    h2 { font-size: 0.95rem; font-weight: 500; margin-bottom: 0.75rem; color: #e8ecf4; }
-    a.link { color: #8890a0; text-decoration: none; font-size: 0.85rem; margin-right: 1rem; }
-    a.back { color: #3b82f6; text-decoration: none; font-size: 0.85rem; }
-    .role-tag {
-      display: inline-block; margin-top: 0.5rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem;
-      color: #8890a0; border: 1px solid #1c2130; padding: 2px 8px; border-radius: 3px;
-    }
-    table { width: 100%; border-collapse: collapse; margin-top: 1.25rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
-    th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #1c2130; vertical-align: middle; }
-    th { color: #8890a0; font-weight: 500; }
-    select {
-      background: #080b10; border: 1px solid #1c2130; border-radius: 4px; color: #c8cdd8;
-      font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; padding: 0.35rem 0.5rem;
-    }
-    .btn-small {
-      background: #161b25; border: 1px solid #2a3347; color: #c8cdd8; padding: 0.35rem 0.7rem;
-      border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-family: 'IBM Plex Mono', monospace;
-    }
-    .btn-small:hover { border-color: #3b82f6; }
-    .btn-danger:hover { border-color: #ef4444; color: #ef4444; }
-    .invite-box {
-      margin-top: 2.5rem; padding: 1.25rem; background: #0e1219; border: 1px solid #1c2130;
-      border-radius: 8px; max-width: 480px;
-    }
-    .invite-row { display: flex; gap: 0.5rem; }
-    input[type=email] {
-      flex: 1; padding: 0.6rem; background: #080b10; border: 1px solid #1c2130; border-radius: 4px;
-      color: #c8cdd8; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem;
-    }
-    .invite-row button {
-      padding: 0.6rem 1rem; background: #3b82f6; border: none; border-radius: 4px;
-      color: white; font-weight: 500; cursor: pointer; font-size: 0.85rem; font-family: 'Inter', sans-serif;
-    }
-    .invite-row button:hover { background: #2563eb; }
-    .invite-msg { font-size: 0.8rem; margin-top: 0.6rem; }
-    .invite-msg.error { color: #ef4444; }
-    .invite-msg.ok { color: #22c55e; }
+  <style>""" + BUGATTI_CSS + """
   </style>
 </head>
 <body>
-  <div class="top">
-    <a class="back" href="/orgs">&larr; Organizations</a>
-    <div>
-      <a class="link" href="/repos">my repos</a>
-      <a class="link" href="/history">history</a>
-      <a class="link" href="/logout">log out</a>
-    </div>
-  </div>
-  <h1 style="margin-top:1rem;">{{ org.name }}</h1>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+  <a class="mono-link" href="/orgs">&larr; Organizations</a>
+  <div class="display-lg" style="margin-top:var(--lg);">{{ org.name }}</div>
   <div class="role-tag">your role: {{ my_role }}</div>
 
-  <table>
+  <table class="bt">
     <tr><th>Email</th><th>Role</th><th>Joined</th><th></th></tr>
     {{ member_rows | safe }}
   </table>
@@ -2698,8 +3070,8 @@ ORG_DETAIL_UI = """<!DOCTYPE html>
 
   {% if invite_rows %}
   <div class="invite-box" style="max-width:640px;">
-    <h2>Pending invites</h2>
-    <table>
+    <div class="title-sm" style="margin-bottom:var(--sm);">Pending invites</div>
+    <table class="bt">
       <tr><th>Email</th><th>Role</th><th>Sent</th><th></th></tr>
       {{ invite_rows | safe }}
     </table>
@@ -2792,6 +3164,8 @@ ORG_DETAIL_UI = """<!DOCTYPE html>
     }
   }
 </script>
+    </main>
+  </div>
 </body>
 </html>"""
 
@@ -2804,46 +3178,30 @@ REPO_ACCESS_UI = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ repo.name }} — Access</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #080b10; color: #c8cdd8; font-family: 'Inter', sans-serif; padding: 2rem; }
-    h1 { font-size: 1.2rem; font-weight: 500; }
-    h2 { font-size: 0.95rem; font-weight: 500; margin-bottom: 0.75rem; color: #e8ecf4; }
-    a.back { color: #3b82f6; text-decoration: none; font-size: 0.85rem; }
-    .sub { color: #8890a0; font-size: 0.8rem; margin-top: 0.3rem; }
-    .toggle-box {
-      margin-top: 1.5rem; padding: 1.25rem; background: #0e1219; border: 1px solid #1c2130;
-      border-radius: 8px; max-width: 560px;
-    }
-    label { font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
-    th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #1c2130; vertical-align: middle; }
-    th { color: #8890a0; font-weight: 500; }
-    select, input {
-      background: #080b10; border: 1px solid #1c2130; border-radius: 4px; color: #c8cdd8;
-      font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; padding: 0.4rem 0.5rem;
-    }
-    .btn-small {
-      background: #161b25; border: 1px solid #2a3347; color: #c8cdd8; padding: 0.35rem 0.7rem;
-      border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-family: 'IBM Plex Mono', monospace;
-    }
-    .btn-small:hover { border-color: #3b82f6; }
-    .btn-danger:hover { border-color: #ef4444; color: #ef4444; }
-    .grant-row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
-    .grant-msg { font-size: 0.8rem; margin-top: 0.6rem; }
-    .grant-msg.error { color: #ef4444; }
-    .grant-msg.ok { color: #22c55e; }
+  <style>""" + BUGATTI_CSS + """
+    .sub{color:var(--muted);margin-top:6px;}
+    .toggle-box{margin-top:var(--lg);padding:var(--lg);background:var(--surface-card);
+      border:1px solid var(--hairline);max-width:560px;}
+    label{font-family:var(--font-text);font-size:16px;color:var(--body);display:flex;
+      align-items:center;gap:var(--xs);cursor:pointer;}
+    .grant-row{display:flex;gap:var(--xs);align-items:center;margin-top:var(--sm);flex-wrap:wrap;}
+    .grant-msg{font-family:var(--font-mono);font-size:12px;margin-top:10px;}
+    .grant-msg.error{color:#c96;}
+    .grant-msg.ok{color:var(--success);}
   </style>
 </head>
 <body>
-  <a class="back" href="/repos">&larr; My repos</a>
-  <h1 style="margin-top:1rem;">{{ repo.name }}</h1>
+  <div class="shell">
+    {{ sidebar | safe }}
+    <main class="main">
+  <a class="mono-link" href="/repos">&larr; My repos</a>
+  <div class="display-lg" style="margin-top:var(--lg);">{{ repo.name }}</div>
   <div class="sub">{{ org.name }} &middot; {{ repo.target }}</div>
 
   <div class="toggle-box">
-    <h2>Restrict visibility</h2>
+    <div class="title-sm" style="margin-bottom:var(--sm);">Restrict visibility</div>
     <label>
       <input type="checkbox" id="restricted-toggle" {{ "checked" if repo.restricted else "" }}
              onchange="toggleRestricted({{ repo.id }}, this.checked)">
@@ -2852,18 +3210,19 @@ REPO_ACCESS_UI = """<!DOCTYPE html>
   </div>
 
   <div class="toggle-box">
-    <h2>Access grants</h2>
-    <table>
+    <div class="title-sm" style="margin-bottom:var(--sm);">Access grants</div>
+    <table class="bt">
       <tr><th>Email</th><th>Can push / open PR</th><th></th></tr>
       {{ grant_rows | safe }}
     </table>
 
     <div class="grant-row">
       <select id="grant-email">{{ member_options | safe }}</select>
-      <label style="gap:0.35rem;"><input type="checkbox" id="grant-can-push"> can push</label>
+      <label style="gap:6px;font-size:14px;"><input type="checkbox" id="grant-can-push"> can push</label>
       <button class="btn-small" onclick="addAccess({{ repo.id }})">Grant</button>
     </div>
     <div class="grant-msg" id="grant-msg"></div>
+  </div>
   </div>
 
 <script>
@@ -2916,6 +3275,8 @@ REPO_ACCESS_UI = """<!DOCTYPE html>
     }
   }
 </script>
+    </main>
+  </div>
 </body>
 </html>"""
 
@@ -2928,55 +3289,63 @@ HTML_UI = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vulnerability Scanner</title>
+  <title>Anchor — New scan</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:        #080b10;
-      --surface:   #0e1219;
-      --border:    #1c2130;
-      --border-hi: #2a3347;
-      --text:      #c8cdd8;
-      --text-dim:  #4a5268;
-      --text-hi:   #e8ecf4;
-      --accent:    #3b82f6;
-      --accent-dim:#1d4ed8;
-      --green:     #22c55e;
-      --red:       #ef4444;
-      --yellow:    #f59e0b;
-      --mono:      'IBM Plex Mono', monospace;
-      --sans:      'Inter', sans-serif;
+      --bg:        #000000;
+      --surface:   #0d0d0d;
+      --border:    #262626;
+      --border-hi: #3a3a3a;
+      --text:      #cccccc;
+      --text-dim:  #666666;
+      --text-hi:   #ffffff;
+      --accent:    #ffffff;
+      --accent-dim:#999999;
+      --green:     #5fa657;
+      --red:       #b0463f;
+      --yellow:    #d4a017;
+      --mono:      'JetBrains Mono', ui-monospace, monospace;
+      --sans:      'Saira Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --serif:     'Cormorant Garamond', Garamond, 'Times New Roman', serif;
     }
 
     html, body {
       height: 100%;
       background: var(--bg);
       color: var(--text);
-      font-family: var(--sans);
-      font-size: 14px;
+      font-family: var(--serif);
+      font-size: 16px;
       line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    h1, h2, h3, .logo, .header-tag, button, .btn, .btn-small {
+      font-family: var(--mono);
     }
 
     /* ── Layout ── */
     .shell {
       min-height: 100vh;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 240px 1fr;
     }
 
-    header {
-      border-bottom: 1px solid var(--border);
-      padding: 0 2rem;
-      height: 52px;
+    .sidebar {
+      border-right: 1px solid var(--border);
+      padding: 1.5rem 0;
       display: flex;
-      align-items: center;
-      gap: 1rem;
+      flex-direction: column;
+      position: sticky;
+      top: 0;
+      height: 100vh;
     }
 
-    .logo {
+    .sidebar .brand {
+      padding: .75rem 1.5rem 2rem;
       font-family: var(--mono);
       font-size: 13px;
       color: var(--text-hi);
@@ -2984,13 +3353,45 @@ HTML_UI = """<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: .5rem;
+      text-decoration: none;
     }
+
+    .side-nav { display: flex; flex-direction: column; }
+    .side-nav a {
+      padding: 14px 1.5rem;
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+    }
+    .side-nav a.active { color: var(--text-hi); border-left-color: var(--text-hi); }
+    .side-nav a:hover { color: var(--text-hi); }
+
+    .side-foot {
+      margin-top: auto;
+      padding: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .side-foot .email { color: var(--text-hi); margin-top: 4px; }
 
     .logo-dot {
       width: 7px; height: 7px;
       border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 8px var(--accent);
+      background: var(--text-hi);
+      box-shadow: 0 0 6px var(--text-hi);
+      flex-shrink: 0;
+    }
+
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      .side-foot { display: none; }
     }
 
     .header-tag {
@@ -3000,6 +3401,8 @@ HTML_UI = """<!DOCTYPE html>
       border: 1px solid var(--border);
       padding: 2px 8px;
       border-radius: 3px;
+      display: inline-block;
+      margin-top: .75rem;
     }
 
     main {
@@ -3138,20 +3541,21 @@ HTML_UI = """<!DOCTYPE html>
     .btn-scan {
       width: 100%;
       margin-top: 1rem;
-      padding: 11px;
-      background: var(--accent);
-      border: none;
-      border-radius: 6px;
-      color: #fff;
-      font-family: var(--sans);
+      padding: 13px;
+      background: transparent;
+      border: 1px solid var(--text-hi);
+      border-radius: 9999px;
+      color: var(--text-hi);
+      font-family: var(--mono);
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 400;
+      letter-spacing: 2px;
+      text-transform: uppercase;
       cursor: pointer;
-      transition: background .15s;
-      letter-spacing: .01em;
+      transition: background .25s ease, color .25s ease;
     }
 
-    .btn-scan:hover { background: var(--accent-dim); }
+    .btn-scan:hover { background: var(--text-hi); color: #000; }
     .btn-scan:disabled { opacity: .4; cursor: not-allowed; }
 
     /* ── Progress panel ── */
@@ -3233,8 +3637,8 @@ HTML_UI = """<!DOCTYPE html>
       display: none;
       margin-top: 1rem;
       background: var(--surface);
-      border: 1px solid var(--yellow);
-      border-radius: 8px;
+      border: 1px solid var(--border-hi);
+      border-radius: 0;
       overflow: hidden;
     }
 
@@ -3245,8 +3649,9 @@ HTML_UI = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
       font-family: var(--mono);
       font-size: 11px;
-      color: var(--yellow);
-      letter-spacing: .03em;
+      color: var(--text-hi);
+      letter-spacing: 2px;
+      text-transform: uppercase;
     }
 
     .approval-body {
@@ -3264,8 +3669,8 @@ HTML_UI = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
     }
 
-    .approval-row .score-pass { color: var(--green); }
-    .approval-row .score-warn { color: var(--yellow); }
+    .approval-row .score-pass { color: var(--text-hi); }
+    .approval-row .score-warn { color: var(--text-dim); }
     .approval-row .score-fail { color: var(--red); }
 
     .approval-question {
@@ -3283,18 +3688,21 @@ HTML_UI = """<!DOCTYPE html>
     .btn-approve, .btn-reject {
       flex: 1;
       padding: 9px;
-      border-radius: 6px;
-      font-family: var(--sans);
-      font-size: 12px;
-      font-weight: 500;
+      border-radius: 9999px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
       cursor: pointer;
-      border: none;
-      transition: opacity .15s;
+      background: transparent;
+      border: 1px solid var(--text-hi);
+      color: var(--text-hi);
+      transition: background .2s ease, color .2s ease;
     }
 
-    .btn-approve { background: var(--green); color: #06210f; }
-    .btn-reject  { background: var(--border-hi); color: var(--text); }
-    .btn-approve:hover, .btn-reject:hover { opacity: .85; }
+    .btn-approve:hover { background: var(--text-hi); color: #000; }
+    .btn-reject { border-color: var(--border-hi); color: var(--text-dim); }
+    .btn-reject:hover { border-color: var(--red); color: var(--red); }
     .btn-approve:disabled, .btn-reject:disabled { opacity: .4; cursor: not-allowed; }
 
     /* ── Result panel ── */
@@ -3573,6 +3981,7 @@ HTML_UI = """<!DOCTYPE html>
     .error-box.visible { display: block; }
 
     footer {
+      grid-column: 2;
       border-top: 1px solid var(--border);
       padding: .75rem 2rem;
       display: flex;
@@ -3582,25 +3991,32 @@ HTML_UI = """<!DOCTYPE html>
       font-size: 10px;
       color: var(--text-dim);
     }
+    @media (max-width: 900px) { footer { grid-column: 1; } }
   </style>
 </head>
 <body>
 <div class="shell">
 
-  <header>
-    <div class="logo">
+  <aside class="sidebar">
+    <a class="brand" href="/">
       <div class="logo-dot"></div>
-      vuln-agent
+      Anchor
+    </a>
+    <nav class="side-nav">
+      <a href="/dashboard">Overview</a>
+      <a href="/repos">Repositories</a>
+      <a href="/orgs">Organizations</a>
+      <a href="/history">History</a>
+      <a href="/scan-console" class="active">New scan</a>
+      <a href="/account">Account</a>
+      <a href="/logout">Log out</a>
+    </nav>
+    <div class="side-foot">
+      <div>Signed in as</div>
+      <div class="email">{{ current_user.email }}</div>
+      <div class="header-tag">bandit · pip-audit · llama-3 · critic</div>
     </div>
-    <span class="header-tag">bandit · pip-audit · llama-3 · critic</span>
-    <span style="margin-left:auto; font-family:var(--mono); font-size:11px; display:flex; gap:1rem; align-items:center;">
-      <a href="/repos" style="color:var(--text-dim);">my repos</a>
-      <a href="/orgs" style="color:var(--text-dim);">organizations</a>
-      <a href="/history" style="color:var(--text-dim);">history</a>
-      <a href="/account" style="color:var(--text-dim);">account</a>
-      <a href="/logout" style="color:var(--text-dim);">log out</a>
-    </span>
-  </header>
+  </aside>
 
   <main>
     <div class="card">
@@ -4133,7 +4549,6 @@ HTML_UI = """<!DOCTYPE html>
 </script>
 </body>
 </html>"""
-
 
 if __name__ == "__main__":
     print("\n  🔍 Vulnerability Agent — Web UI")
