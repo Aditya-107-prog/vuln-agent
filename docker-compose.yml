@@ -13,6 +13,15 @@
 #
 # Requires web_app.py to already be running on port 5000 on your host
 # machine before Prometheus can scrape it successfully.
+#
+# /metrics auth: if METRICS_TOKEN is set in your .env, it must equal the
+# literal token in observability/prometheus.yml, or every scrape returns
+# 404 (by design -- see the /metrics route in web_app.py). Leaving
+# METRICS_TOKEN unset also works locally; the endpoint is then open.
+#
+# This file is LOCAL ONLY. Railway ignores docker-compose.yml entirely --
+# production metrics go through observability/alloy/ instead, which
+# scrapes over Railway's private network and ships to Grafana Cloud.
 
 services:
   prometheus:

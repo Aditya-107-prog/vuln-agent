@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+logs/
+reports/
+pr_workdir/
+proposed_fixes/
+test_transitive_output/
+test_transitive_workspace/
+vuln_agent.db
+osv-scanner.exe

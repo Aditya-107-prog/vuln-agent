@@ -1,0 +1,15 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Alembic owns the schema -- models.init_db() has no create_all() fallback,
+# so a deploy against a fresh Postgres has zero tables until this runs.
+# Single shell string -- Railway rejects a multi-element argv array here.
+preDeployCommand = "flask db upgrade"
+healthcheckPath = "/health"
+# /health does a real "SELECT 1", and cold start pulls in langgraph +
+# APScheduler before the first request is served -- 30s was too tight.
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
